@@ -78,6 +78,26 @@ The row is built for discovery. By default it only suggests channels you have ne
 8. Each channel gets at most 2 items, and a channel loses score for every item it already has in the row. If the row is still short, the best channels can have a third.
 9. The row holds up to 60 items. With fewer than 10 it is hidden.
 
+### AI assistance (optional)
+
+With API keys set, two models help. Both are off until their keys are set, and the row works exactly as before without them.
+
+Jev (TypeSafe) judges the best 150 main-row candidates on each refresh. It sees a video's title, channel, length and view count, plus about 15 titles you finished and 15 you removed or gave up on. It answers three questions: is this background filler, is it made for young children, and how likely is this viewer to enjoy it. Filler and kids' content are dropped, and the rest are weighted by the enjoyment score. You never write a profile; the examples are the profile, and they update as you watch.
+
+Claude (Anthropic, `claude-opus-5`) writes about 8 Left Field ideas a day. It reads the same examples plus your subscriptions, works out why you like what you finish, and proposes topics that share the reason but not the subject, each with a YouTube search. The app runs the searches, keeps only channels you've never watched, asks Jev whether each video is well made and really fits the idea, and builds a second row, "Left Field (Local)", taking turns between ideas. An idea that gets two or more removals and fewer finished videos is dropped and reported back to Claude as rejected. One with two finished videos is reported as landed, so Claude builds on it.
+
+The app also tracks what happens to the videos it shows: finished (80% or more), abandoned (under 30%), or shown in 4 refreshes without being played. Videos you pass over are dropped, and finished and abandoned ones become examples.
+
+Keys are set in Settings > General > For You (Local), or by writing them to the app over adb, which is easier than typing with a remote:
+
+```sh
+printf 'typesafe=...\nanthropic=...\n' | adb shell run-as org.smarttube.localrecs sh -c 'cat > files/localrecs_keys.txt'
+```
+
+The app reads that file on the next Home load and deletes it. Keys are kept in the app's private storage. They survive updates installed with `adb install -r`, but not an uninstall. Anyone with root, or adb access to this debug build, can read them.
+
+Using these means video titles, channel names and your subscriptions are sent to TypeSafe and Anthropic. Calls go straight from the TV. They are made only during the background refresh (every 2 hours by default) and the daily idea generation, never while you browse.
+
 ### Removing videos
 
 Long-press a video in the row and choose "Remove from For You (Local)". It disappears straight away, and the next refresh learns from it in three ways. The video never comes back. Its channel scores half as much for each removal, and after two removals the channel is dropped entirely. The watched videos that led to it (its seeds) count for 30% less per removal, so fewer videos like it turn up. The last 300 removals are remembered and older ones fade out. Settings > General > For You (Local) > Forget removed videos clears them. Removals stay on the device and are not sent to YouTube.

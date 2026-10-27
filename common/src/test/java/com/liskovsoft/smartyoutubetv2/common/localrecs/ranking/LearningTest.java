@@ -98,6 +98,29 @@ public class LearningTest {
     }
 
     @Test
+    public void leftFieldRowTakesTurnsBetweenIdeasWithOneVideoPerChannel() {
+        List<ScoredCandidate> scored = new java.util.ArrayList<>();
+        // Idea A finds four strong videos, idea B two weaker ones, one sharing a channel with A
+        scored.add(leftField("a1", "CH1", "A", 0.9));
+        scored.add(leftField("a2", "CH2", "A", 0.8));
+        scored.add(leftField("a3", "CH3", "A", 0.7));
+        scored.add(leftField("a4", "CH4", "A", 0.6));
+        scored.add(leftField("b1", "CH1", "B", 0.5));
+        scored.add(leftField("b2", "CH5", "B", 0.4));
+        scored.add(leftField("rejected", "CH6", "B", -1));
+
+        List<Candidate> row = LeftFieldAssembler.assemble(scored, 3, 10);
+
+        assertEquals(Arrays.asList("a1", "b2", "a2", "a3"), FilterTest.ids(row));
+    }
+
+    private static ScoredCandidate leftField(String videoId, String channel, String leapId, double score) {
+        Candidate candidate = video(videoId, channel);
+        candidate.leapId = leapId;
+        return new ScoredCandidate(candidate, score);
+    }
+
+    @Test
     public void leapBatchRoundTrips() {
         Leap.Batch batch = new Leap.Batch(123, Arrays.asList(
                 new Leap("l1", "canal boat restoration", "patient craft, a sense of place", "canal boat restoration vlog"),

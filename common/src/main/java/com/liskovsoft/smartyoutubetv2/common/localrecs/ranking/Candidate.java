@@ -26,6 +26,8 @@ public class Candidate {
     public int hop = 1;
     /** For second-hop videos, the video whose related list they came from. */
     public String hopParentId;
+    /** For Left Field videos, the idea whose search found them. */
+    public String leapId;
     /** Ids of the seeds this video showed up as related to. */
     public final Set<String> relatedSeedIds = new LinkedHashSet<>();
     public Object payload;

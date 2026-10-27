@@ -18,6 +18,8 @@ import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.smartyoutubetv2.common.R;
 import com.liskovsoft.smartyoutubetv2.common.app.models.data.Video;
 import com.liskovsoft.smartyoutubetv2.common.app.models.playback.service.VideoStateService;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ai.JevClient;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ai.LeapGenerator;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.cache.CachePolicy;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.cache.CachedRow;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Blocklist;
@@ -28,10 +30,16 @@ import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ChannelDiscovery;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ChannelResolver;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Feedback;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.HeuristicRanker;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Judgment;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Leap;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.LeftFieldAssembler;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Outcomes;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Ranker;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.RankingContext;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Recommender;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.RecsConfig;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.RowAssembler;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ScoredCandidate;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Seed;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ViewCounts;
 import com.liskovsoft.smartyoutubetv2.common.prefs.BlockedChannelData;
@@ -43,6 +51,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
@@ -63,7 +72,7 @@ import io.reactivex.schedulers.Schedulers;
 public class LocalRecsEngine {
     private static final String TAG = LocalRecsEngine.class.getSimpleName();
     private static final long CALL_TIMEOUT_MS = 10_000;
-    private static final long REFRESH_TIMEOUT_MS = 90_000;
+    private static final long REFRESH_TIMEOUT_MS = 180_000;
     private static final long FIRST_RUN_WAIT_MS = 6_000;
     /** Don't hammer YouTube when refreshes keep producing nothing (e.g. empty history). */
     private static final long MIN_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
@@ -74,8 +83,26 @@ public class LocalRecsEngine {
     private static final int MAX_SUGGESTIONS_PER_SEED = 40;
     /** Paid films and shows sometimes turn up in related videos. */
     private static final String YOUTUBE_MOVIES_CHANNEL_ID = "UCuVPpxrm2VAgpH3Ktln4HXg";
+    /** Jev judges the best this many main-row candidates; the rest are dropped when it's on. */
+    private static final int JEV_MAIN_LIMIT = 150;
+    private static final int LEFT_FIELD_MAX = 24;
+    /** Below this the Left Field row is hidden (and the browse screen won't try to "continue" it). */
+    private static final int LEFT_FIELD_MIN = 6;
+    private static final int LEFT_FIELD_PER_LEAP = 3;
+    private static final int LEAPS_SEARCHED = 8;
+    private static final int SEARCH_RESULTS_PER_LEAP = 12;
+    private static final long LEAPS_TTL_MS = 24 * 60 * 60 * 1000L;
+    /** Don't ask Claude again sooner than this after a failed or recent attempt. */
+    private static final long LEAP_RETRY_MS = 6 * 60 * 60 * 1000L;
+    /** Shown in this many refreshes without being played: treated as a pass and dropped. */
+    private static final int IGNORED_AFTER_SHOWS = 4;
+    private static final int EXAMPLES = 15;
     @SuppressLint("StaticFieldLeak")
     private static LocalRecsEngine sInstance;
+    private final java.util.concurrent.atomic.AtomicBoolean mGeneratingLeaps = new java.util.concurrent.atomic.AtomicBoolean();
+    private long mLastLeapAttemptMs;
+    private boolean mForceNewLeaps;
+    private boolean mRefreshPending;
     private final Context mContext;
     private final LocalRecsData mData;
     private final RecsConfig mConfig = new RecsConfig();
@@ -130,33 +157,55 @@ public class LocalRecsEngine {
             return;
         }
 
-        CachedRow cached = CachedRow.decode(mData.getCache());
-        CachedRow.Item cachedItem = null;
-        List<CachedRow.Item> remaining = new ArrayList<>();
-
-        if (cached != null) {
-            for (CachedRow.Item item : cached.items) {
-                if (video.videoId.equals(item.videoId)) {
-                    cachedItem = item;
-                } else {
-                    remaining.add(item);
-                }
-            }
-
-            // Keep the saved row in step with what's on screen
-            mData.setCache(new CachedRow(cached.savedAtMs, cached.owner, remaining).encode());
+        // Keep the saved rows in step with what's on screen
+        CachedRow.Item cachedItem = removeCached(video.videoId, mData.getCache(), false);
+        CachedRow.Item leftFieldItem = removeCached(video.videoId, mData.getLeftFieldCache(), true);
+        if (cachedItem == null) {
+            cachedItem = leftFieldItem;
         }
 
         String channelName = video.getAuthor();
         String channelId = video.channelId != null ? video.channelId : cachedItem != null ? cachedItem.channelId : null;
+        // For Left Field videos this holds "leap:<id>", which is how a removal counts against that idea
         List<String> seedIds = cachedItem != null && cachedItem.seedIds != null ?
                 Arrays.asList(cachedItem.seedIds.split(",")) : Collections.emptyList();
 
         Feedback feedback = loadFeedback();
-        feedback.addRemoval(new Feedback.Removal(video.videoId, channelId, channelName, seedIds));
+        feedback.addRemoval(new Feedback.Removal(video.videoId, channelId, channelName, seedIds, video.getTitle()));
         mData.setFeedback(feedback.encode());
 
         Log.d(TAG, "Removed %s (%s), %s removals stored", video.videoId, channelName, feedback.size());
+    }
+
+    /**
+     * Drops the video from one saved row and returns its saved entry, or null if it wasn't there.
+     */
+    private CachedRow.Item removeCached(String videoId, String data, boolean leftField) {
+        CachedRow cached = CachedRow.decode(data);
+        if (cached == null) {
+            return null;
+        }
+
+        CachedRow.Item found = null;
+        List<CachedRow.Item> remaining = new ArrayList<>();
+        for (CachedRow.Item item : cached.items) {
+            if (videoId.equals(item.videoId)) {
+                found = item;
+            } else {
+                remaining.add(item);
+            }
+        }
+
+        if (found != null) {
+            String encoded = new CachedRow(cached.savedAtMs, cached.owner, remaining).encode();
+            if (leftField) {
+                mData.setLeftFieldCache(encoded);
+            } else {
+                mData.setCache(encoded);
+            }
+        }
+
+        return found;
     }
 
     public int getRemovalCount() {
@@ -171,7 +220,26 @@ public class LocalRecsEngine {
         return Feedback.decode(mData.getFeedback(), mConfig);
     }
 
+    /**
+     * Ask Claude for fresh Left Field ideas on the next refresh, and start that refresh now.
+     */
+    public void requestNewLeaps() {
+        mForceNewLeaps = true;
+        mLastLeapAttemptMs = 0;
+        refreshNow();
+    }
+
+    /**
+     * Current Left Field ideas, for the settings screen.
+     */
+    public List<Leap> getCurrentLeaps() {
+        Leap.Batch batch = Leap.Batch.decode(mData.getLeaps());
+        return batch != null ? batch.leaps : Collections.<Leap>emptyList();
+    }
+
     private List<MediaGroup> loadForDisplay() {
+        mData.importKeysFile(mContext);
+
         if (!isSignedIn() || !isOnline()) {
             return Collections.emptyList();
         }
@@ -231,35 +299,84 @@ public class LocalRecsEngine {
 
     private synchronized void onRefreshDone() {
         mRefresh = null;
+
+        if (mRefreshPending) {
+            mRefreshPending = false;
+            mLastRefreshStartMs = 0;
+            Schedulers.io().scheduleDirect(this::startRefresh);
+        }
+    }
+
+    /**
+     * Refresh now, or straight after the refresh that's running.
+     */
+    private synchronized void refreshSoon() {
+        if (mRefresh != null) {
+            mRefreshPending = true;
+        } else {
+            refreshNow();
+        }
     }
 
     private List<MediaGroup> computeAndStore() {
         long startMs = System.currentTimeMillis();
         String owner = getOwner();
-        List<Candidate> ranked = compute();
+        Rows result = compute();
 
-        if (ranked.isEmpty()) {
+        if (result.main.isEmpty()) {
             Log.d(TAG, "Nothing to recommend yet");
             return Collections.emptyList();
         }
 
-        List<MediaItem> row = new ArrayList<>();
-        List<CachedRow.Item> items = new ArrayList<>();
-        for (Candidate candidate : ranked) {
-            MediaItem item = (MediaItem) candidate.payload;
-            CachedRow.Item cacheItem = CachedMediaItem.toCacheItem(item);
-            cacheItem.seedIds = TextUtils.join(",", candidate.relatedSeedIds);
-            row.add(item);
-            items.add(cacheItem);
+        long now = System.currentTimeMillis();
+        List<MediaItem> main = toItems(result.main);
+        mData.setCache(new CachedRow(now, owner, toCacheItems(result.main)).encode());
+
+        List<MediaGroup> rows = new ArrayList<>();
+        rows.add(new LocalRecsMediaGroup(mContext.getString(R.string.localrecs_title), main));
+
+        if (result.leftField.size() >= LEFT_FIELD_MIN) {
+            mData.setLeftFieldCache(new CachedRow(now, owner, toCacheItems(result.leftField)).encode());
+            rows.add(new LocalRecsMediaGroup(mContext.getString(R.string.localrecs_left_field_title), toItems(result.leftField)));
+        } else if (result.leftFieldRan) {
+            // Too few good surprises this time: hide the row rather than show a stale one
+            mData.setLeftFieldCache("");
         }
-        mData.setCache(new CachedRow(System.currentTimeMillis(), owner, items).encode());
 
-        Log.d(TAG, "Refreshed %s items in %s ms", row.size(), System.currentTimeMillis() - startMs);
+        Log.d(TAG, "Refreshed %s + %s items in %s ms", main.size(), result.leftField.size(), System.currentTimeMillis() - startMs);
 
-        return Collections.singletonList(new LocalRecsMediaGroup(mContext.getString(R.string.localrecs_title), row));
+        return rows;
     }
 
-    private List<Candidate> compute() {
+    private static class Rows {
+        List<Candidate> main = Collections.emptyList();
+        List<Candidate> leftField = Collections.emptyList();
+        boolean leftFieldRan;
+    }
+
+    private static List<MediaItem> toItems(List<Candidate> candidates) {
+        List<MediaItem> items = new ArrayList<>();
+        for (Candidate candidate : candidates) {
+            items.add((MediaItem) candidate.payload);
+        }
+        return items;
+    }
+
+    private static List<CachedRow.Item> toCacheItems(List<Candidate> candidates) {
+        List<CachedRow.Item> items = new ArrayList<>();
+        for (Candidate candidate : candidates) {
+            CachedRow.Item item = CachedMediaItem.toCacheItem((MediaItem) candidate.payload);
+            List<String> links = new ArrayList<>(candidate.relatedSeedIds);
+            if (candidate.leapId != null) {
+                links.add(Feedback.LEAP_PREFIX + candidate.leapId);
+            }
+            item.seedIds = TextUtils.join(",", links);
+            items.add(item);
+        }
+        return items;
+    }
+
+    private Rows compute() {
         ContentService contentService = YouTubeServiceManager.instance().getContentService();
         MediaItemService itemService = YouTubeServiceManager.instance().getMediaItemService();
         AtomicInteger budget = new AtomicInteger(MAX_CALLS_PER_REFRESH);
@@ -279,12 +396,16 @@ public class LocalRecsEngine {
         List<MediaGroup> home = call(budget, contentService::getHome);
 
         if (historyItems.isEmpty()) {
-            return Collections.emptyList();
+            return new Rows();
         }
 
         // The first history page is often short, so seeds can come from the second page too
         List<MediaItem> allHistory = new ArrayList<>(historyItems);
         allHistory.addAll(olderHistoryItems);
+
+        // What happened to videos the rows showed before: finished, abandoned or passed over
+        Outcomes outcomes = Outcomes.decode(mData.getOutcomes());
+        outcomes.recordPlayback(playbackOf(stateService, allHistory));
 
         // Related videos only need seed video ids, so fetch them before resolving channels
         List<Seed> rawSeeds = new ArrayList<>();
@@ -313,6 +434,7 @@ public class LocalRecsEngine {
 
             if (seeds.size() < mConfig.maxSeeds) {
                 Seed seed = new Seed(item.getVideoId(), channelId, name, completionOf(item, stateService));
+                seed.title = item.getTitle();
                 seed.feedbackFactor = feedback.seedMultiplier(seed.videoId);
                 seeds.add(seed);
             }
@@ -383,18 +505,319 @@ public class LocalRecsEngine {
 
         // 4-7. Filter, score, diversify
         excludedIds.addAll(feedback.removedVideoIds());
+        excludedIds.addAll(outcomes.ignoredVideoIds(IGNORED_AFTER_SHOWS));
         CandidateFilter filter = new CandidateFilter(excludedIds, createBlocklist(), mConfig)
                 .excludeChannels(mConfig.newChannelsOnly ? skipForDiscovery : removedChannels);
 
         RankingContext context = new RankingContext(seeds, affinity, discovery, knownChannels, mConfig, System.currentTimeMillis());
         context.feedback = feedback;
-        List<Candidate> ranked = new Recommender(mRanker, mConfig).recommend(context, candidates, filter);
+        List<ScoredCandidate> scored = mRanker.score(context, filter.apply(candidates));
 
-        Log.d(TAG, "Seeds %s, known channel keys %s, new channels %s, candidates %s, picked %s",
-                seeds.size(), knownChannels.size(), discovery.keys().size(), candidates.size(), ranked.size());
-        writeDiagnostics(seeds, subscribedKeys, knownChannels, discovery, candidates.size(), ranked);
+        // Model step 1: Jev reads the best candidates against examples of what you finish and drop
+        JevClient jev = mData.isJevEnabled() ? new JevClient(mData.getTypeSafeApiKey()) : null;
+        JevClient.Viewer viewer = viewerExamples(seeds, feedback, outcomes);
+        Map<String, Judgment> judgments = Collections.emptyMap();
 
-        return ranked;
+        if (jev != null) {
+            List<ScoredCandidate> top = best(scored, JEV_MAIN_LIMIT);
+            judgments = jev.judgeForMainRow(candidatesOf(top), viewer);
+            // Only trust the judged set when most calls worked; otherwise rank as before
+            if (judgments.size() >= top.size() / 2) {
+                scored = Judgment.applyToMainRow(top, judgments);
+            }
+        }
+
+        Rows rows = new Rows();
+        rows.main = RowAssembler.assemble(scored, context);
+
+        // Model step 2: Left Field, surprises from Claude's ideas, vetted by Jev
+        Set<String> leftFieldSkipChannels = new HashSet<>(skipForDiscovery);
+        Set<String> leftFieldExcluded = new HashSet<>(excludedIds);
+        for (Candidate candidate : rows.main) {
+            leftFieldExcluded.add(candidate.videoId);
+        }
+
+        Leap.Batch leaps = null;
+        if (mData.isLeftFieldEnabled()) {
+            leaps = activeLeaps(feedback, outcomes);
+            if (leaps != null) {
+                rows.leftField = buildLeftField(contentService, jev, viewer, leaps, leftFieldExcluded, leftFieldSkipChannels, resolver);
+                rows.leftFieldRan = true;
+            }
+            maybeGenerateLeaps(seeds, feedback, outcomes, subscriptions, leaps);
+        }
+
+        for (Candidate candidate : rows.main) {
+            outcomes.recordShown(candidate.videoId, candidate.title, candidate.channelName, null);
+        }
+        for (Candidate candidate : rows.leftField) {
+            outcomes.recordShown(candidate.videoId, candidate.title, candidate.channelName, candidate.leapId);
+        }
+        mData.setOutcomes(outcomes.encode());
+
+        Log.d(TAG, "Seeds %s, known channel keys %s, new channels %s, candidates %s, picked %s + %s",
+                seeds.size(), knownChannels.size(), discovery.keys().size(), candidates.size(), rows.main.size(), rows.leftField.size());
+        writeDiagnostics(seeds, subscribedKeys, knownChannels, discovery, candidates.size(), rows.main);
+        appendModelDiagnostics(judgments, viewer, leaps, rows.leftField, outcomes);
+
+        return rows;
+    }
+
+    /**
+     * Examples for the models: titles you finished and titles you removed or gave up on.
+     */
+    private JevClient.Viewer viewerExamples(List<Seed> seeds, Feedback feedback, Outcomes outcomes) {
+        List<String> finished = new ArrayList<>();
+        List<String> dropped = new ArrayList<>();
+
+        for (Outcomes.Entry entry : outcomes.withState(Outcomes.STATE_FINISHED, EXAMPLES)) {
+            addExample(finished, entry.title, entry.channelName);
+        }
+        for (Seed seed : seeds) {
+            if (finished.size() < EXAMPLES && seed.completion >= Outcomes.FINISHED) {
+                addExample(finished, seed.title, seed.channelName);
+            }
+        }
+
+        for (Feedback.Removal removal : feedback.recentRemovals(EXAMPLES)) {
+            addExample(dropped, removal.title, removal.channelName);
+        }
+        for (Outcomes.Entry entry : outcomes.withState(Outcomes.STATE_ABANDONED, EXAMPLES)) {
+            if (dropped.size() < EXAMPLES) {
+                addExample(dropped, entry.title, entry.channelName);
+            }
+        }
+        for (Seed seed : seeds) {
+            if (dropped.size() < EXAMPLES && seed.completion >= 0 && seed.completion < Outcomes.ABANDONED) {
+                addExample(dropped, seed.title, seed.channelName);
+            }
+        }
+
+        return new JevClient.Viewer(finished, dropped);
+    }
+
+    private static void addExample(List<String> examples, String title, String channel) {
+        if (title == null || title.trim().isEmpty()) {
+            return;
+        }
+
+        String example = channel != null ? title.trim() + " (" + channel + ")" : title.trim();
+        if (!examples.contains(example)) {
+            examples.add(example);
+        }
+    }
+
+    /**
+     * Current ideas minus the ones that have failed, or null if there are none to use.
+     */
+    private Leap.Batch activeLeaps(Feedback feedback, Outcomes outcomes) {
+        Leap.Batch batch = Leap.Batch.decode(mData.getLeaps());
+        if (batch == null) {
+            return null;
+        }
+
+        Map<String, Integer> hits = outcomes.leapHits();
+        Map<String, Integer> misses = feedback.leapMisses();
+        List<Leap> active = new ArrayList<>();
+
+        for (Leap leap : batch.leaps) {
+            if (!Leap.hasFailed(leap.id, hits, misses)) {
+                active.add(leap);
+            }
+        }
+
+        return active.isEmpty() ? null : new Leap.Batch(batch.createdAtMs, active, batch.rejected);
+    }
+
+    /**
+     * Search YouTube for each idea, keep only channels you've never watched, let Jev vet quality and fit,
+     * then take turns between ideas.
+     */
+    private List<Candidate> buildLeftField(ContentService contentService, JevClient jev, JevClient.Viewer viewer, Leap.Batch leaps,
+                                           Set<String> excludedIds, Set<String> skipChannels, ChannelResolver resolver) {
+        if (jev == null) {
+            return Collections.emptyList();
+        }
+
+        AtomicInteger budget = new AtomicInteger(LEAPS_SEARCHED);
+        List<Candidate> found = new ArrayList<>();
+        Map<String, Leap> leapByVideoId = new java.util.HashMap<>();
+
+        for (Leap leap : leaps.leaps) {
+            if (budget.get() <= 0) {
+                break;
+            }
+
+            int added = 0;
+            for (MediaGroup group : nonNull(call(budget, () -> contentService.getSearch(leap.query)))) {
+                for (MediaItem item : videosOf(group)) {
+                    if (added >= SEARCH_RESULTS_PER_LEAP || leapByVideoId.containsKey(item.getVideoId())) {
+                        continue;
+                    }
+                    Candidate candidate = toCandidate(item, resolver);
+                    candidate.leapId = leap.id;
+                    found.add(candidate);
+                    leapByVideoId.put(candidate.videoId, leap);
+                    added++;
+                }
+            }
+        }
+
+        // Surprises must come from channels you don't know, and never repeat what's watched, removed or in the main row
+        List<Candidate> allowed = new CandidateFilter(excludedIds, createBlocklist(), mConfig)
+                .excludeChannels(skipChannels)
+                .apply(found);
+
+        Map<String, Judgment> judgments = jev.judgeForLeftField(allowed, viewer, leapByVideoId);
+        List<ScoredCandidate> scored = new ArrayList<>();
+        for (Candidate candidate : allowed) {
+            scored.add(new ScoredCandidate(candidate, Judgment.leftFieldScore(judgments.get(candidate.videoId))));
+        }
+
+        return LeftFieldAssembler.assemble(scored, LEFT_FIELD_PER_LEAP, LEFT_FIELD_MAX);
+    }
+
+    /**
+     * Ask Claude for new ideas in the background when they're a day old, mostly used up, or the user
+     * asked. When they arrive, refresh so the row appears straight away.
+     */
+    private void maybeGenerateLeaps(List<Seed> seeds, Feedback feedback, Outcomes outcomes, MediaGroup subscriptions, Leap.Batch active) {
+        long now = System.currentTimeMillis();
+        Leap.Batch stored = Leap.Batch.decode(mData.getLeaps());
+        boolean stale = stored == null || now - stored.createdAtMs >= LEAPS_TTL_MS || active == null || active.leaps.size() < 3;
+
+        if (!(mForceNewLeaps || stale) || now - mLastLeapAttemptMs < LEAP_RETRY_MS || !mGeneratingLeaps.compareAndSet(false, true)) {
+            return;
+        }
+
+        mForceNewLeaps = false;
+        mLastLeapAttemptMs = now;
+
+        LeapGenerator.Evidence evidence = new LeapGenerator.Evidence();
+        JevClient.Viewer viewer = viewerExamples(seeds, feedback, outcomes);
+        evidence.finished.addAll(viewer.finished);
+        evidence.dropped.addAll(viewer.dropped);
+        for (MediaItem channel : itemsOf(subscriptions)) {
+            if (channel.getTitle() != null) {
+                evidence.subscriptions.add(channel.getTitle().trim());
+            }
+        }
+
+        // Carry forward what we've learned about earlier ideas
+        Map<String, Integer> hits = outcomes.leapHits();
+        Map<String, Integer> misses = feedback.leapMisses();
+        List<String> rejected = new ArrayList<>(stored != null ? stored.rejected : Collections.<String>emptyList());
+        if (stored != null) {
+            for (Leap leap : stored.leaps) {
+                if (Leap.hasLanded(leap.id, hits)) {
+                    evidence.landed.add(leap.label);
+                } else if (Leap.hasFailed(leap.id, hits, misses) && !rejected.contains(leap.label)) {
+                    rejected.add(leap.label);
+                }
+            }
+        }
+        while (rejected.size() > 30) {
+            rejected.remove(0);
+        }
+        evidence.rejected.addAll(rejected);
+
+        String apiKey = mData.getAnthropicApiKey();
+        Schedulers.io().scheduleDirect(() -> {
+            try {
+                List<Leap> leaps = new LeapGenerator(apiKey).generate(evidence, System.currentTimeMillis());
+
+                if (leaps != null && !leaps.isEmpty()) {
+                    mData.setLeaps(new Leap.Batch(System.currentTimeMillis(), leaps, rejected).encode());
+                    Log.d(TAG, "Got %s new Left Field ideas", leaps.size());
+                    mGeneratingLeaps.set(false);
+                    refreshSoon();
+                }
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Generating ideas failed: %s", e);
+            } finally {
+                mGeneratingLeaps.set(false);
+            }
+        });
+    }
+
+    private static Map<String, Double> playbackOf(VideoStateService stateService, List<MediaItem> history) {
+        Map<String, Double> result = new java.util.HashMap<>();
+
+        for (MediaItem item : history) {
+            if (item.getPercentWatched() > 0) {
+                result.put(item.getVideoId(), item.getPercentWatched() / 100.0);
+            }
+        }
+
+        if (stateService != null) {
+            for (VideoStateService.State state : new ArrayList<>(stateService.getStates())) {
+                if (state != null && state.video != null && state.video.videoId != null && state.durationMs > 0) {
+                    result.put(state.video.videoId, Math.min(1.0, (double) state.positionMs / state.durationMs));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static List<ScoredCandidate> best(List<ScoredCandidate> scored, int limit) {
+        List<ScoredCandidate> sorted = new ArrayList<>(scored);
+        Collections.sort(sorted, (a, b) -> Double.compare(b.score, a.score));
+        return new ArrayList<>(sorted.subList(0, Math.min(limit, sorted.size())));
+    }
+
+    private static List<Candidate> candidatesOf(List<ScoredCandidate> scored) {
+        List<Candidate> result = new ArrayList<>();
+        for (ScoredCandidate item : scored) {
+            result.add(item.candidate);
+        }
+        return result;
+    }
+
+    /**
+     * Adds what the models did to the diagnostics written by {@link #writeDiagnostics}.
+     */
+    private void appendModelDiagnostics(Map<String, Judgment> judgments, JevClient.Viewer viewer, Leap.Batch leaps,
+                                        List<Candidate> leftField, Outcomes outcomes) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("\nOutcomes tracked: ").append(outcomes.size())
+                    .append(", finished ").append(outcomes.withState(Outcomes.STATE_FINISHED, 1000).size())
+                    .append(", abandoned ").append(outcomes.withState(Outcomes.STATE_ABANDONED, 1000).size())
+                    .append(", passed over ").append(outcomes.ignoredVideoIds(IGNORED_AFTER_SHOWS).size()).append('\n');
+
+            sb.append("\nJev: ").append(mData.isJevEnabled() ? judgments.size() + " judged" : "off").append('\n');
+            sb.append("  Finished examples: ").append(viewer.finished).append('\n');
+            sb.append("  Dropped examples: ").append(viewer.dropped).append('\n');
+            int dropped = 0;
+            for (Judgment judgment : judgments.values()) {
+                if (judgment.isUnwanted()) {
+                    dropped++;
+                }
+            }
+            sb.append("  Dropped as filler or kids: ").append(dropped).append('\n');
+
+            sb.append("\nLeft Field: ").append(mData.isLeftFieldEnabled() ? "on" : "off")
+                    .append(", generating: ").append(mGeneratingLeaps.get()).append('\n');
+            if (leaps != null) {
+                sb.append("  Ideas from ").append(new java.util.Date(leaps.createdAtMs)).append(":\n");
+                for (Leap leap : leaps.leaps) {
+                    sb.append("    ").append(leap.id).append(" ").append(leap.label).append(" | ").append(leap.query)
+                            .append(" | ").append(leap.reason).append('\n');
+                }
+                sb.append("  Rejected before: ").append(leaps.rejected).append('\n');
+            }
+            sb.append("  Row (").append(leftField.size()).append("):\n");
+            for (Candidate candidate : leftField) {
+                sb.append("    [").append(candidate.leapId).append("] ").append(candidate.channelName)
+                        .append(" | ").append(candidate.title).append('\n');
+            }
+
+            String existing = mData.getDiagnostics();
+            mData.setDiagnostics((existing != null ? existing : "") + sb);
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Couldn't write model diagnostics: %s", e);
+        }
     }
 
     /**
@@ -650,11 +1073,36 @@ public class LocalRecsEngine {
     /**
      * Cached items, minus anything watched or blocked since the row was built.
      */
+    /**
+     * The saved rows, minus anything watched or removed since. The main row comes first; without
+     * it nothing is shown, since the Left Field row would otherwise be the only local row.
+     */
     private List<MediaGroup> fromCache(CachedRow cached) {
         mConfig.maxDurationMs = mData.getMaxDurationMs();
         Set<String> watchedIds = localWatchedIds(VideoStateService.instance(mContext));
         watchedIds.addAll(loadFeedback().removedVideoIds());
         CandidateFilter filter = new CandidateFilter(watchedIds, createBlocklist(), mConfig);
+
+        List<MediaItem> main = filterCached(cached, filter);
+        if (main.size() < mConfig.minItems) {
+            return Collections.emptyList();
+        }
+
+        List<MediaGroup> rows = new ArrayList<>();
+        rows.add(new LocalRecsMediaGroup(mContext.getString(R.string.localrecs_title), main));
+
+        CachedRow leftField = mData.isLeftFieldEnabled() ? CachedRow.decode(mData.getLeftFieldCache()) : null;
+        if (leftField != null && leftField.owner.equals(cached.owner)) {
+            List<MediaItem> items = filterCached(leftField, filter);
+            if (items.size() >= LEFT_FIELD_MIN) {
+                rows.add(new LocalRecsMediaGroup(mContext.getString(R.string.localrecs_left_field_title), items));
+            }
+        }
+
+        return rows;
+    }
+
+    private static List<MediaItem> filterCached(CachedRow cached, CandidateFilter filter) {
         List<MediaItem> items = new ArrayList<>();
 
         for (CachedRow.Item item : cached.items) {
@@ -664,11 +1112,7 @@ public class LocalRecsEngine {
             }
         }
 
-        if (items.size() < mConfig.minItems) {
-            return Collections.emptyList();
-        }
-
-        return Collections.singletonList(new LocalRecsMediaGroup(mContext.getString(R.string.localrecs_title), items));
+        return items;
     }
 
     private static Set<String> localWatchedIds(VideoStateService stateService) {

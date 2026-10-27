@@ -4,6 +4,18 @@
     <bool name="localrecs_updater_disabled">false</bool>
 
     <string name="localrecs_title" translatable="false">For You (Local)</string>
+    <string name="localrecs_left_field_title" translatable="false">Left Field (Local)</string>
+    <string name="localrecs_ai" translatable="false">AI assistance</string>
+    <string name="localrecs_typesafe_key" translatable="false">TypeSafe API key (Jev)</string>
+    <string name="localrecs_anthropic_key" translatable="false">Anthropic API key (Claude)</string>
+    <string name="localrecs_key_set" translatable="false">set</string>
+    <string name="localrecs_key_not_set" translatable="false">not set</string>
+    <string name="localrecs_jev_enabled" translatable="false">Let Jev judge suggestions</string>
+    <string name="localrecs_left_field_enabled" translatable="false">Show the Left Field row (needs both keys)</string>
+    <string name="localrecs_new_ideas" translatable="false">Generate new Left Field ideas now</string>
+    <string name="localrecs_new_ideas_started" translatable="false">Asking Claude for ideas. The Left Field row updates in a minute or two.</string>
+    <string name="localrecs_current_ideas" translatable="false">Current Left Field ideas</string>
+    <string name="localrecs_key_saved" translatable="false">Key saved</string>
     <string name="localrecs_enable" translatable="false">Show the For You (Local) row on Home</string>
     <string name="localrecs_new_channels_only" translatable="false">Only suggest channels I haven\'t watched</string>
     <string name="localrecs_refresh_interval" translatable="false">Refresh interval</string>
