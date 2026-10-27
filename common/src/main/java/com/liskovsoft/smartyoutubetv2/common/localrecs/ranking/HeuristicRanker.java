@@ -56,7 +56,7 @@ public class HeuristicRanker implements Ranker {
             sum += context.seedWeight(seedId);
         }
 
-        return sum;
+        return sum * candidate.hopFactor(context.config);
     }
 
     /**

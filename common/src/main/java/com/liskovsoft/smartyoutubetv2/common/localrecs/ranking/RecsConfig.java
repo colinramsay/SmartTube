@@ -21,14 +21,18 @@ public class RecsConfig {
     /** Only recommend channels the user has never watched or subscribed to. */
     public boolean newChannelsOnly = true;
     /** New channels found through related videos whose latest uploads we also fetch. */
-    public int discoveredChannels = 6;
+    public int discoveredChannels = 12;
+    /** New channels whose best video we open to get related videos from (the second hop) and the channel id. */
+    public int hopChannels = 10;
+    /** Second-hop videos are one step further from what you watched, so they count for less. */
+    public double secondHopFactor = 0.6;
     /** In mixed mode, how a new channel's score compares to a known channel's affinity. */
     public double newChannelScoreFactor = 0.8;
 
     // Candidates
     /** Latest uploads from known channels. Only used when {@link #newChannelsOnly} is off. */
     public int rssChannels = 8;
-    public int relatedSeeds = 8;
+    public int relatedSeeds = 10;
     /** Videos watched less than this fraction of the way don't lead to related videos. */
     public double minRelatedSeedCompletion = 0.3;
 
@@ -62,6 +66,10 @@ public class RecsConfig {
 
     // Diversity
     public int maxPerChannel = 2;
+    /** If the row is still short after the main pass, allow up to this many per channel to fill it. */
+    public int maxPerChannelFill = 3;
+    /** Most second-hop videos any one parent video may add, so one odd hop can't take over the row. */
+    public int maxPerHopParent = 3;
     /** Score multiplier applied once per item already picked from the same channel. */
     public double channelRepeatPenalty = 0.6;
     public int explorationSlots = 2;
@@ -71,7 +79,7 @@ public class RecsConfig {
     public int[] explorationPositions = {4, 9};
 
     // Output
-    public int maxItems = 30;
+    public int maxItems = 60;
     /** Fewer items than this and the row is hidden. Keeps the browse screen from trying to "continue" it. */
     public int minItems = 10;
 }

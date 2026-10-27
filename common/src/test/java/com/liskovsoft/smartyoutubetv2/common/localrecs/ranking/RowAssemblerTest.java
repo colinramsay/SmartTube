@@ -24,6 +24,7 @@ public class RowAssemblerTest {
     public void capsItemsPerChannel() {
         RecsConfig config = smallConfig();
         config.explorationSlots = 0;
+        config.maxPerChannelFill = config.maxPerChannel;
 
         List<Candidate> candidates = new ArrayList<>();
         double[] scores = new double[12];
@@ -40,6 +41,56 @@ public class RowAssemblerTest {
 
         assertEquals(2, countChannel(row, "A"));
         assertEquals(8, row.size());
+    }
+
+    @Test
+    public void fillPassAllowsAThirdItemWhenTheRowIsShort() {
+        RecsConfig config = smallConfig();
+        config.explorationSlots = 0;
+        config.maxItems = 7;
+
+        List<Candidate> candidates = new ArrayList<>();
+        double[] scores = new double[8];
+        for (int i = 0; i < 4; i++) {
+            candidates.add(video("a" + i, "A"));
+            candidates.add(video("b" + i, "B"));
+            scores[i * 2] = 1.0 - i * 0.1;
+            scores[i * 2 + 1] = 0.9 - i * 0.1;
+        }
+
+        List<Candidate> row = RowAssembler.assemble(scored(candidates, scores), contextKnowing(config, "A", "B"));
+
+        // Two each in the main pass, then a third each to fill; never a fourth
+        assertEquals(6, row.size());
+        assertEquals(3, countChannel(row, "A"));
+        assertEquals(Arrays.asList("a0", "b0", "a1", "b1"), ids(row).subList(0, 4));
+    }
+
+    @Test
+    public void oneHopParentCannotFloodTheRow() {
+        RecsConfig config = smallConfig();
+        config.minItems = 1;
+
+        // One music video's related list: lots of different artists, all scoring well
+        List<Candidate> candidates = new ArrayList<>();
+        double[] scores = new double[8];
+        for (int i = 0; i < 6; i++) {
+            Candidate artist = video("m" + i, "ARTIST" + i);
+            artist.hop = 2;
+            artist.hopParentId = "tinydesk";
+            candidates.add(artist);
+            scores[i] = 1.0;
+        }
+        candidates.add(video("x", "X"));
+        candidates.add(video("y", "Y"));
+        scores[6] = 0.5;
+        scores[7] = 0.5;
+
+        List<Candidate> row = RowAssembler.assemble(scored(candidates, scores), contextKnowing(config));
+
+        assertEquals(config.maxPerHopParent + 2, row.size());
+        assertTrue(ids(row).contains("x"));
+        assertTrue(ids(row).contains("y"));
     }
 
     @Test
@@ -120,7 +171,7 @@ public class RowAssemblerTest {
         assertTrue(!ids(row).contains("s2"));
         assertTrue("related video from new channel gets in", ids(row).contains("x1"));
         for (String channel : Arrays.asList("A", "B", "C")) {
-            assertTrue(countChannel(row, channel) <= config.maxPerChannel);
+            assertTrue(countChannel(row, channel) <= config.maxPerChannelFill);
         }
     }
 

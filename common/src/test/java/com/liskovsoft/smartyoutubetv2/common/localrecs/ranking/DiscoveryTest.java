@@ -36,6 +36,22 @@ public class DiscoveryTest {
     }
 
     @Test
+    public void secondHopSightingsCountForLessThanFirstHop() {
+        Candidate firstHop = related("f1", "FIRST", "s1");
+        Candidate secondHop = related("h1", "SECOND", "s1");
+        secondHop.hop = 2;
+        Candidate secondHopOfFirst = related("f2", "FIRST", "s1");
+        secondHopOfFirst.hop = 2;
+
+        ChannelAffinity discovery = ChannelDiscovery.compute(mSeeds, Arrays.asList(firstHop, secondHop, secondHopOfFirst),
+                known("A", "B", "C"), mConfig);
+
+        double full = Seed.weight(0, 1, mConfig);
+        assertEquals(full, discovery.get("FIRST"), 1e-9); // a second sighting via the same seed adds nothing
+        assertEquals(full * mConfig.secondHopFactor, discovery.get("SECOND"), 1e-9);
+    }
+
+    @Test
     public void knownChannelsAreNotDiscovered() {
         List<Candidate> related = Arrays.asList(related("a1", "A", "s2"), related("x1", "X", "s1"));
 

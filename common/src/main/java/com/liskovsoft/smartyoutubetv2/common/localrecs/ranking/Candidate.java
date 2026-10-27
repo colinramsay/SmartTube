@@ -22,6 +22,10 @@ public class Candidate {
     public long viewCount = -1;
     public boolean isMovie;
     public boolean fromRss;
+    /** 1 for related to something you watched, 2 for related to one of those (see {@link RecsConfig#secondHopFactor}). */
+    public int hop = 1;
+    /** For second-hop videos, the video whose related list they came from. */
+    public String hopParentId;
     /** Ids of the seeds this video showed up as related to. */
     public final Set<String> relatedSeedIds = new LinkedHashSet<>();
     public Object payload;
@@ -44,9 +48,17 @@ public class Candidate {
     /**
      * Fold another sighting of the same video into this one.
      */
+    /**
+     * How much this video's links to seeds count.
+     */
+    public double hopFactor(RecsConfig config) {
+        return hop > 1 ? config.secondHopFactor : 1;
+    }
+
     public void mergeFrom(Candidate other) {
         relatedSeedIds.addAll(other.relatedSeedIds);
         fromRss |= other.fromRss;
+        hop = Math.min(hop, other.hop);
         isLive |= other.isLive;
         isUpcoming |= other.isUpcoming;
         isShorts |= other.isShorts;

@@ -2,7 +2,6 @@ package com.liskovsoft.smartyoutubetv2.common.localrecs.ranking;
 
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,8 +21,9 @@ public class ChannelDiscovery {
             seedWeights.put(seeds.get(i).videoId, seeds.get(i).weightAt(i, config));
         }
 
-        ChannelAffinity result = new ChannelAffinity();
-        Set<String> counted = new HashSet<>();
+        // Strongest link per channel and seed: a first-hop sighting beats a second-hop one
+        Map<String, Double> links = new HashMap<>();
+        Map<String, String> channelOfLink = new HashMap<>();
 
         for (Candidate candidate : related) {
             if (candidate.relatedSeedIds.isEmpty()
@@ -40,10 +40,23 @@ public class ChannelDiscovery {
             for (String seedId : candidate.relatedSeedIds) {
                 // Each seed vouches for a channel once, however many of its videos it suggested
                 Double weight = seedWeights.get(seedId);
-                if (weight != null && counted.add(channel + "|" + seedId)) {
-                    result.add(channel, weight);
+                if (weight == null) {
+                    continue;
+                }
+
+                String link = channel + "|" + seedId;
+                double value = weight * candidate.hopFactor(config);
+                Double current = links.get(link);
+                if (current == null || value > current) {
+                    links.put(link, value);
+                    channelOfLink.put(link, channel);
                 }
             }
+        }
+
+        ChannelAffinity result = new ChannelAffinity();
+        for (Map.Entry<String, Double> link : links.entrySet()) {
+            result.add(channelOfLink.get(link.getKey()), link.getValue());
         }
 
         return result;

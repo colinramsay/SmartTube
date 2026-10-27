@@ -28,7 +28,12 @@ public class RowAssembler {
         Set<String> picked = new HashSet<>();
 
         List<Candidate> exploration = pickExploration(sorted, context, perChannel, picked);
-        List<Candidate> main = pickMain(sorted, config, config.maxItems - exploration.size(), perChannel, picked);
+        List<Candidate> main = pickMain(sorted, config.maxPerChannel, config, config.maxItems - exploration.size(), perChannel, picked);
+
+        // Still room: let the best channels have one more each
+        if (main.size() + exploration.size() < config.maxItems && config.maxPerChannelFill > config.maxPerChannel) {
+            main.addAll(pickMain(sorted, config.maxPerChannelFill, config, config.maxItems - exploration.size() - main.size(), perChannel, picked));
+        }
 
         List<Candidate> row = new ArrayList<>(main);
 
@@ -78,7 +83,7 @@ public class RowAssembler {
     /**
      * Greedy pick: each round takes the best score after the repeat penalty for its channel.
      */
-    private static List<Candidate> pickMain(List<ScoredCandidate> sorted, RecsConfig config, int limit,
+    private static List<Candidate> pickMain(List<ScoredCandidate> sorted, int maxPerChannel, RecsConfig config, int limit,
                                             Map<String, Integer> perChannel, Set<String> picked) {
         List<Candidate> result = new ArrayList<>();
 
@@ -93,7 +98,8 @@ public class RowAssembler {
 
                 int count = count(perChannel, item.candidate.channelKey());
 
-                if (count >= config.maxPerChannel) {
+                if (count >= maxPerChannel || (item.candidate.hopParentId != null
+                        && count(perChannel, hopKey(item.candidate)) >= config.maxPerHopParent)) {
                     continue;
                 }
 
@@ -113,9 +119,18 @@ public class RowAssembler {
             picked.add(best.candidate.videoId);
             String channel = best.candidate.channelKey();
             perChannel.put(channel, count(perChannel, channel) + 1);
+            String hop = hopKey(best.candidate);
+            perChannel.put(hop, count(perChannel, hop) + 1);
         }
 
         return result;
+    }
+
+    /**
+     * Counter key for the parent of a second-hop video. Only checked for second-hop videos.
+     */
+    private static String hopKey(Candidate candidate) {
+        return "hop:" + candidate.hopParentId;
     }
 
     private static int count(Map<String, Integer> perChannel, String channel) {

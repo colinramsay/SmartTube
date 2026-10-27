@@ -63,14 +63,14 @@ import io.reactivex.schedulers.Schedulers;
 public class LocalRecsEngine {
     private static final String TAG = LocalRecsEngine.class.getSimpleName();
     private static final long CALL_TIMEOUT_MS = 10_000;
-    private static final long REFRESH_TIMEOUT_MS = 60_000;
+    private static final long REFRESH_TIMEOUT_MS = 90_000;
     private static final long FIRST_RUN_WAIT_MS = 6_000;
     /** Don't hammer YouTube when refreshes keep producing nothing (e.g. empty history). */
     private static final long MIN_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
-    private static final int MAX_CALLS_PER_REFRESH = 20;
+    private static final int MAX_CALLS_PER_REFRESH = 30;
     /** RSS feeds for a batch are fetched in parallel by the service, so this bounds concurrency too. */
     private static final int RSS_BATCH_SIZE = 4;
-    private static final int METADATA_CONCURRENCY = 2;
+    private static final int METADATA_CONCURRENCY = 3;
     private static final int MAX_SUGGESTIONS_PER_SEED = 40;
     /** Paid films and shows sometimes turn up in related videos. */
     private static final String YOUTUBE_MOVIES_CHANNEL_ID = "UCuVPpxrm2VAgpH3Ktln4HXg";
@@ -364,8 +364,11 @@ public class LocalRecsEngine {
         skipForDiscovery.addAll(removedChannels);
         ChannelAffinity discovery = ChannelDiscovery.compute(seeds, candidates, skipForDiscovery, mConfig);
 
+        expandSecondHop(itemService, discovery, candidates, resolver, budget);
+        discovery = ChannelDiscovery.compute(seeds, candidates, skipForDiscovery, mConfig);
+
         // Latest uploads from the best new channels, plus from favourite channels when those are allowed
-        addRssCandidates(contentService, discoveredChannelIds(itemService, discovery, candidates, resolver, budget), candidates, budget, resolver);
+        addRssCandidates(contentService, discoveredChannelIds(discovery, resolver), candidates, budget, resolver);
 
         if (!mConfig.newChannelsOnly) {
             addRssCandidates(contentService, affinity.topChannelIds(mConfig.rssChannels), candidates, budget, resolver);
@@ -429,7 +432,7 @@ public class LocalRecsEngine {
             for (Candidate candidate : row) {
                 sb.append("  ").append(candidate.channelName).append(" [").append(candidate.channelId).append("] views ")
                         .append(candidate.viewCount).append(", ").append(candidate.durationMs / 60_000).append(" min, seeds ").append(candidate.relatedSeedIds.size())
-                        .append(candidate.fromRss ? ", rss" : "").append(" | ").append(candidate.title).append('\n');
+                        .append(candidate.fromRss ? ", rss" : "").append(candidate.hop > 1 ? ", hop 2" : "").append(" | ").append(candidate.title).append('\n');
             }
 
             mData.setDiagnostics(sb.toString());
@@ -466,33 +469,33 @@ public class LocalRecsEngine {
     }
 
     /**
-     * Channel ids for the best new channels, so their latest uploads can be fetched.
-     * TV tiles rarely carry a channel id, so for channels known only by name we open one of their
-     * videos (one request each) and read the id from its page.
+     * Second hop: open the best video of each top new channel. Its page gives the channel id (which
+     * RSS needs and TV tiles rarely carry) and its own related videos, which reach channels one step
+     * further from what you watched. Those count for less, see {@link RecsConfig#secondHopFactor}.
      */
-    private List<String> discoveredChannelIds(MediaItemService itemService, ChannelAffinity discovery,
-                                              List<Candidate> candidates, ChannelResolver resolver, AtomicInteger budget) {
-        List<String> result = new ArrayList<>();
-        List<String> lookups = new ArrayList<>();
+    private void expandSecondHop(MediaItemService itemService, ChannelAffinity discovery, List<Candidate> candidates,
+                                 ChannelResolver resolver, AtomicInteger budget) {
+        List<Candidate> parents = new ArrayList<>();
 
-        for (String key : discovery.topKeys(mConfig.discoveredChannels)) {
-            if (!key.startsWith("name:")) {
-                result.add(key);
-                continue;
-            }
+        for (String key : discovery.topKeys(mConfig.hopChannels)) {
+            Candidate best = null;
 
             for (Candidate candidate : candidates) {
-                if (key.equals(candidate.channelKey())) {
-                    lookups.add(candidate.videoId);
-                    break;
+                if (candidate.hop == 1 && key.equals(candidate.channelKey())
+                        && (best == null || candidate.relatedSeedIds.size() > best.relatedSeedIds.size())) {
+                    best = candidate;
                 }
+            }
+
+            if (best != null) {
+                parents.add(best);
             }
         }
 
-        List<MediaItemMetadata> pages = Observable.fromIterable(lookups)
-                .flatMap(videoId -> Observable.fromCallable(() -> {
-                            MediaItemMetadata metadata = call(budget, () -> itemService.getMetadata(videoId));
-                            return metadata != null ? Collections.singletonList(metadata) : Collections.<MediaItemMetadata>emptyList();
+        List<Pair<Candidate, MediaItemMetadata>> pages = Observable.fromIterable(parents)
+                .flatMap(parent -> Observable.fromCallable(() -> {
+                            MediaItemMetadata metadata = call(budget, () -> itemService.getMetadata(parent.videoId));
+                            return metadata != null ? Collections.singletonList(new Pair<>(parent, metadata)) : Collections.<Pair<Candidate, MediaItemMetadata>>emptyList();
                         })
                         .subscribeOn(Schedulers.io())
                         .flatMapIterable(list -> list),
@@ -501,14 +504,42 @@ public class LocalRecsEngine {
                 .onErrorReturnItem(Collections.emptyList())
                 .blockingGet();
 
-        for (MediaItemMetadata metadata : pages) {
-            if (metadata.getChannelId() != null) {
-                resolver.learn(metadata.getChannelId(), metadata.getAuthor());
-                result.add(metadata.getChannelId());
+        for (Pair<Candidate, MediaItemMetadata> page : pages) {
+            resolver.learn(page.second.getChannelId(), page.second.getAuthor());
+            resolver.learn(page.second.getChannelId(), page.first.channelName);
+
+            int added = 0;
+            for (MediaGroup group : nonNull(page.second.getSuggestions())) {
+                for (MediaItem item : videosOf(group)) {
+                    if (added++ >= MAX_SUGGESTIONS_PER_SEED) {
+                        break;
+                    }
+                    Candidate candidate = toCandidate(item, resolver);
+                    candidate.hop = 2;
+                    candidate.hopParentId = page.first.videoId;
+                    // Credit the watched videos that led to the parent, so removals still teach the right seeds
+                    candidate.relatedSeedIds.addAll(page.first.relatedSeedIds);
+                    candidates.add(candidate);
+                }
+            }
+        }
+    }
+
+    /**
+     * Channel ids for the best new channels, as far as we know them.
+     */
+    private List<String> discoveredChannelIds(ChannelAffinity discovery, ChannelResolver resolver) {
+        Set<String> result = new java.util.LinkedHashSet<>();
+
+        for (String key : discovery.topKeys(mConfig.discoveredChannels)) {
+            String channelId = key.startsWith("name:") ? resolver.resolveId(null, key.substring("name:".length())) : key;
+
+            if (channelId != null) {
+                result.add(channelId);
             }
         }
 
-        return result;
+        return new ArrayList<>(result);
     }
 
     private void addRssCandidates(ContentService contentService, List<String> channelIds, List<Candidate> candidates,
