@@ -18,6 +18,8 @@ import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.smartyoutubetv2.common.R;
 import com.liskovsoft.smartyoutubetv2.common.app.models.data.Video;
 import com.liskovsoft.smartyoutubetv2.common.app.models.playback.service.VideoStateService;
+import com.liskovsoft.smartyoutubetv2.common.app.presenters.BrowsePresenter;
+import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ai.JevClient;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ai.LeapGenerator;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.cache.CachePolicy;
@@ -103,6 +105,8 @@ public class LocalRecsEngine {
     private long mLastLeapAttemptMs;
     private boolean mForceNewLeaps;
     private boolean mRefreshPending;
+    /** How many local rows Home is showing. A refresh that produces more reloads Home to show them. */
+    private volatile int mRowsOnScreen = -1;
     private final Context mContext;
     private final LocalRecsData mData;
     private final RecsConfig mConfig = new RecsConfig();
@@ -250,6 +254,7 @@ public class LocalRecsEngine {
 
         if (policy.isUsable(cached, owner)) {
             List<MediaGroup> rows = fromCache(cached);
+            mRowsOnScreen = rows.size();
 
             // Also refresh when removals or newly watched videos have left too few items to show
             if (rows.isEmpty() || policy.needsRefresh(cached, owner, System.currentTimeMillis())) {
@@ -260,12 +265,13 @@ public class LocalRecsEngine {
         }
 
         // First run: give the refresh a short head start, then let Home carry on regardless.
-        // The refresh keeps going in the background and fills the cache for next time.
+        // The refresh keeps going in the background, and Home is reloaded when it lands.
         List<MediaGroup> result = startRefresh()
                 .timeout(FIRST_RUN_WAIT_MS, TimeUnit.MILLISECONDS)
                 .onErrorReturnItem(Collections.emptyList())
                 .blockingFirst(Collections.emptyList());
 
+        mRowsOnScreen = result.size();
         return result;
     }
 
@@ -344,8 +350,28 @@ public class LocalRecsEngine {
         }
 
         Log.d(TAG, "Refreshed %s + %s items in %s ms", main.size(), result.leftField.size(), System.currentTimeMillis() - startMs);
+        showIfMore(rows.size());
 
         return rows;
+    }
+
+    /**
+     * If Home is showing fewer local rows than we now have (first run, or the first Left Field ideas
+     * just arrived), reload it so they appear now rather than on the next visit. Only then, since a
+     * reload also re-fetches YouTube's rows.
+     */
+    private void showIfMore(int rowCount) {
+        if (mRowsOnScreen < 0 || rowCount <= mRowsOnScreen) {
+            return;
+        }
+
+        mRowsOnScreen = rowCount;
+        Utils.post(() -> {
+            BrowsePresenter presenter = BrowsePresenter.instance(mContext);
+            if (presenter.isHomeSection()) {
+                presenter.refresh(false);
+            }
+        });
     }
 
     private static class Rows {
@@ -651,7 +677,8 @@ public class LocalRecsEngine {
             int added = 0;
             for (MediaGroup group : nonNull(call(budget, () -> contentService.getSearch(leap.query)))) {
                 for (MediaItem item : videosOf(group)) {
-                    if (added >= SEARCH_RESULTS_PER_LEAP || leapByVideoId.containsKey(item.getVideoId())) {
+                    // Shorts in search results often aren't flagged, but they come without a length
+                    if (added >= SEARCH_RESULTS_PER_LEAP || leapByVideoId.containsKey(item.getVideoId()) || item.getDurationMs() <= 0) {
                         continue;
                     }
                     Candidate candidate = toCandidate(item, resolver);
