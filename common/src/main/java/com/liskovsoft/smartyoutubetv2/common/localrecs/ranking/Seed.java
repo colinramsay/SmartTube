@@ -11,6 +11,8 @@ public class Seed {
     public final double completion;
     /** Lowered when videos this seed led to were removed, see {@link Feedback}. */
     public double feedbackFactor = 1;
+    /** Video title, used as an example of what the viewer likes. */
+    public String title;
 
     public Seed(String videoId, String channelId, String channelName, double completion) {
         this.videoId = videoId;

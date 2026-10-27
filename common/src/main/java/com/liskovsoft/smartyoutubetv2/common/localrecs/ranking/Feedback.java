@@ -19,7 +19,10 @@ import java.util.Set;
  * Only the most recent removals are kept, so old dislikes fade out over time.
  */
 public class Feedback {
-    private static final String VERSION = "feedback-v1";
+    private static final String VERSION = "feedback-v2";
+    private static final String VERSION_1 = "feedback-v1";
+    /** Seed ids starting with this are Left Field ideas, not watched videos. */
+    public static final String LEAP_PREFIX = "leap:";
     private static final char FIELD_SEP = '\u001F';
     private static final char RECORD_SEP = '\u001E';
     private static final String LIST_SEP = ",";
@@ -31,8 +34,14 @@ public class Feedback {
         public final String channelId;
         public final String channelName;
         public final Set<String> seedIds;
+        public String title;
 
         public Removal(String videoId, String channelId, String channelName, Collection<String> seedIds) {
+            this(videoId, channelId, channelName, seedIds, null);
+        }
+
+        public Removal(String videoId, String channelId, String channelName, Collection<String> seedIds, String title) {
+            this.title = title;
             this.videoId = videoId;
             this.channelId = channelId;
             this.channelName = channelName;
@@ -126,6 +135,34 @@ public class Feedback {
         return Math.pow(mConfig.seedRemovalPenalty, count);
     }
 
+    /**
+     * Removed videos per Left Field idea.
+     */
+    public java.util.Map<String, Integer> leapMisses() {
+        java.util.Map<String, Integer> result = new java.util.HashMap<>();
+        for (Removal removal : mRemovals) {
+            for (String seedId : removal.seedIds) {
+                if (seedId.startsWith(LEAP_PREFIX)) {
+                    String leapId = seedId.substring(LEAP_PREFIX.length());
+                    Integer count = result.get(leapId);
+                    result.put(leapId, count == null ? 1 : count + 1);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Most recent first.
+     */
+    public List<Removal> recentRemovals(int limit) {
+        List<Removal> result = new ArrayList<>();
+        for (int i = mRemovals.size() - 1; i >= 0 && result.size() < limit; i--) {
+            result.add(mRemovals.get(i));
+        }
+        return result;
+    }
+
     public String encode() {
         StringBuilder sb = new StringBuilder(VERSION);
 
@@ -134,7 +171,8 @@ public class Feedback {
                     .append(clean(removal.videoId)).append(FIELD_SEP)
                     .append(clean(removal.channelId)).append(FIELD_SEP)
                     .append(clean(removal.channelName)).append(FIELD_SEP)
-                    .append(clean(join(removal.seedIds)));
+                    .append(clean(join(removal.seedIds))).append(FIELD_SEP)
+                    .append(clean(removal.title));
         }
 
         return sb.toString();
@@ -152,19 +190,21 @@ public class Feedback {
 
         String[] records = data.split(String.valueOf(RECORD_SEP), -1);
 
-        if (!VERSION.equals(records[0])) {
+        boolean v1 = VERSION_1.equals(records[0]);
+        if (!VERSION.equals(records[0]) && !v1) {
             return feedback;
         }
 
         for (int i = 1; i < records.length; i++) {
             String[] fields = records[i].split(String.valueOf(FIELD_SEP), -1);
 
-            if (fields.length != 4) {
+            if (fields.length != (v1 ? 4 : 5)) {
                 continue;
             }
 
             List<String> seedIds = fields[3].isEmpty() ? Collections.emptyList() : Arrays.asList(fields[3].split(LIST_SEP));
-            feedback.addRemoval(new Removal(fields[0], emptyToNull(fields[1]), emptyToNull(fields[2]), seedIds));
+            feedback.addRemoval(new Removal(fields[0], emptyToNull(fields[1]), emptyToNull(fields[2]), seedIds,
+                    v1 ? null : emptyToNull(fields[4])));
         }
 
         return feedback;
