@@ -1,0 +1,110 @@
+# SmarterTube fork
+
+This is a personal fork of [SmartTube](https://github.com/yuliskov/SmartTube). It adds one row to the top of Home, "For You (Local)", which is ranked on the device from your own watch history and subscriptions. It builds as a separate app called SmarterTube (`org.smarttube.localrecs`), so it installs next to official SmartTube on a Fire TV.
+
+## Branches
+
+`master` mirrors `upstream/master` exactly. Never commit to it.
+
+`custom` holds all of our work and gets rebased onto `master` whenever upstream moves.
+
+The `MediaServiceCore` and `SharedModules` submodules always point at whatever upstream pins. We don't change anything inside them.
+
+## Syncing with upstream
+
+```sh
+scripts/sync-upstream.sh
+git push origin master
+git push --force-with-lease origin custom
+```
+
+The script fetches upstream, fast-forwards `master`, updates the submodules, and rebases `custom`. If the rebase hits a conflict it stops and tells you what to do. Every edit we make to an upstream file has a `LOCALRECS` comment next to it, so `grep -rn LOCALRECS` on the conflicted files shows you which lines are ours.
+
+## Building
+
+The toolchain comes from devenv (JDK 17, Android SDK, adb). Run `direnv allow` once, or prefix commands with `devenv shell --`. Upstream ships `gradlew` without the executable bit, so call it through bash:
+
+```sh
+devenv shell -- bash gradlew :smarttubetv:assembleStlocalDebug
+devenv shell -- bash gradlew :common:testStstableDebugUnitTest --tests 'com.liskovsoft.smartyoutubetv2.common.localrecs.*'
+```
+
+Run the build and the tests as two separate commands. If a Gradle invocation mentions `Ststable` anywhere, upstream's build applies the Google Services plugin to every variant in it, and that plugin fails on our package name.
+
+We don't upgrade Gradle, AGP or SDK levels. That would conflict with upstream on every sync.
+
+## Signing
+
+Android only installs an update over an existing app if both are signed with the same key. Create one keystore and keep it somewhere safe outside the repo:
+
+```sh
+keytool -genkeypair -v -keystore ~/keys/smartertube.jks -alias smartertube -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Then create `keystore.properties` in the repo root:
+
+```
+storeFile=/home/you/keys/smartertube.jks
+storePassword=...
+keyAlias=smartertube
+keyPassword=...
+```
+
+`smarttubetv/build.gradle` reads this file for both debug and release builds. `.gitignore` covers `keystore.properties`, `*.jks` and `*.keystore`. Without the file, builds are signed with the debug key in `.android/` inside this checkout. That works, but a build from a different checkout or machine won't install over it until you uninstall first.
+
+## Installing on a Fire TV
+
+On the TV, turn on Settings > My Fire TV > Developer options > ADB debugging, and find the IP under Settings > My Fire TV > About > Network. Then:
+
+```sh
+scripts/install-firetv.sh 192.168.1.50
+```
+
+The script connects with adb, builds the `stlocal` debug APK and installs it with `adb install -r`. It installs the `armeabi-v7a` APK by default; set `ABI=arm64-v8a` or `ABI=universal` to install a different one. The first time, accept the debugging prompt on the TV.
+
+## How the row works
+
+The code is in `common/src/main/java/com/liskovsoft/smartyoutubetv2/common/localrecs/`.
+
+1. Seeds are the last 20 videos in your YouTube history. Recent videos count for more, and so do videos you finished. Completion comes from local playback state when we have it, otherwise from YouTube's progress bar.
+2. Each channel's affinity is the sum of its seed weights. Subscribed channels get a smaller base score on top.
+3. Candidates are the latest uploads (RSS) from the top 8 channels, plus YouTube's related videos for the 4 strongest seeds.
+4. Each candidate gets a score that mixes channel affinity, how many seeds it was related to, and how new it is.
+5. The filter drops watched videos, Shorts, live and upcoming streams, duplicates, channels you've blocked in SmartTube, and titles that contain your blocked words.
+6. Each channel gets at most 2 items, and a channel loses score for every item it already has in the row. Two slots are kept for good candidates from channels you haven't watched.
+7. The row holds up to 30 items. With fewer than 10 it is hidden.
+
+The scoring code in `localrecs/ranking` and `localrecs/cache` is plain Java with no Android or network calls, and the unit tests cover it. `Ranker` is the place to plug in a different ranker later. Diversity rules run after it, so a new ranker only has to score relevance.
+
+When Home loads, the cached row shows straight away. If it's older than the refresh interval (2 hours by default), a refresh runs in the background and the new row appears on the next Home load. The one exception is the very first run, when there's no cache yet. Home then waits up to 6 seconds for the first refresh before it carries on without the row. A refresh makes at most 12 service calls, runs 2 related-video lookups at a time, gives each call 10 seconds and the whole refresh 60. Any error is logged and the row is skipped. Home itself never fails because of it.
+
+Signed-out users get no row, because there's no history to seed it. The row also hides when the device is offline.
+
+Settings live under Settings > General > For You (Local). There you can turn the row on or off, change the refresh interval, add blocked title words, or start a refresh.
+
+The built-in updater is off in the `stlocal` flavour. It's controlled by the `localrecs_updater_disabled` bool resource, which `smarttubetv/src/stlocal/res/values/strings.xml` sets to true. "Check for updates" just shows a message.
+
+## Upstream files we touch
+
+| File | Why |
+|---|---|
+| `common/.../presenters/BrowsePresenter.java` | Puts our row in front of the Home feed with `Observable.concat` |
+| `common/.../presenters/settings/GeneralSettingsPresenter.java` | Adds the For You (Local) settings entry |
+| `common/.../presenters/dialogs/AppUpdatePresenter.java` | Stops update checks when the build flag is set |
+| `smarttubetv/build.gradle` | Adds the `stlocal` flavour |
+| `.gitignore` | Ignores devenv state and signing files |
+
+Everything else is new files: `localrecs/`, `common/src/main/res/values/localrecs.xml`, `smarttubetv/src/stlocal/`, `scripts/`, the devenv files and this document.
+
+## Manual test checklist (Fire TV)
+
+1. Install with `scripts/install-firetv.sh`. SmarterTube should show up next to official SmartTube.
+2. Sign in and watch a few videos to the end. Open Home. The first time, the row can take a few seconds to appear, or only show up on the next Home load.
+3. Check that "For You (Local)" is the first row and the YouTube rows load below it as usual.
+4. Play a video from the row. Playback, the long-press menu and history should all work.
+5. Finish a video from the row. Go to Settings > General > For You (Local) > Refresh now, then reopen Home. The video you watched should be gone.
+6. Turn the row off in the same settings dialog. Back on Home, the row should be gone and the rest of Home unchanged. Turn it back on and it should return.
+7. Add a blocked word that matches a title in the row and refresh. That video should drop out.
+8. Turn off Wi-Fi and open Home. The row should not appear, and Home should show its usual offline error.
+9. Sign out. The row should not appear.
+10. Go to Settings > About > Check for updates. You should get the "Updates are turned off" message, and no update dialog.
