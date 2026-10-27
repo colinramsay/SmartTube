@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * How much the user seems to like each channel, keyed by {@link Candidate#channelKey()} style keys.
@@ -57,6 +58,32 @@ public class ChannelAffinity {
         }
 
         return null;
+    }
+
+    /**
+     * Adds both the id key and the name key, so a later lookup by either one matches.
+     */
+    public static void addKeys(Set<String> keys, String channelId, String channelName) {
+        String idKey = keyOf(channelId, null);
+        String nameKey = keyOf(null, channelName);
+
+        if (idKey != null) {
+            keys.add(idKey);
+        }
+
+        if (nameKey != null) {
+            keys.add(nameKey);
+        }
+    }
+
+    public static boolean containsChannel(Set<String> keys, String channelId, String channelName) {
+        String idKey = keyOf(channelId, null);
+        String nameKey = keyOf(null, channelName);
+        return (idKey != null && keys.contains(idKey)) || (nameKey != null && keys.contains(nameKey));
+    }
+
+    public Set<String> keys() {
+        return Collections.unmodifiableSet(mScores.keySet());
     }
 
     public void add(String channelKey, double score) {

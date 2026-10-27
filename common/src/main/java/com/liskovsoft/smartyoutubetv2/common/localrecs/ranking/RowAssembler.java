@@ -49,7 +49,8 @@ public class RowAssembler {
         RecsConfig config = context.config;
         List<Candidate> result = new ArrayList<>();
 
-        if (sorted.isEmpty() || config.explorationSlots <= 0) {
+        // Every channel is new when known ones are filtered out, so there is nothing to reserve slots for
+        if (sorted.isEmpty() || config.explorationSlots <= 0 || config.newChannelsOnly) {
             return result;
         }
 

@@ -17,7 +17,10 @@ public class Recommender {
 
     public List<Candidate> recommend(List<Seed> seeds, ChannelAffinity affinity, Collection<Candidate> candidates,
                                      CandidateFilter filter, long nowMs) {
-        RankingContext context = new RankingContext(seeds, affinity, mConfig, nowMs);
+        return recommend(new RankingContext(seeds, affinity, mConfig, nowMs), candidates, filter);
+    }
+
+    public List<Candidate> recommend(RankingContext context, Collection<Candidate> candidates, CandidateFilter filter) {
         List<Candidate> allowed = filter.apply(candidates);
         return RowAssembler.assemble(mRanker.score(context, allowed), context);
     }

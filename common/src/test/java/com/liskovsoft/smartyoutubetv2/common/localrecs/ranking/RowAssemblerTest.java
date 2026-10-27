@@ -58,6 +58,7 @@ public class RowAssemblerTest {
     @Test
     public void reservesExplorationSlotsForUnknownChannels() {
         RecsConfig config = smallConfig();
+        config.newChannelsOnly = false;
         config.explorationSlots = 2;
         config.explorationPositions = new int[] {1, 3};
         config.maxPerChannel = 10;
@@ -97,6 +98,7 @@ public class RowAssemblerTest {
     @Test
     public void endToEndPipelineProducesDiverseUnwatchedRow() {
         RecsConfig config = new RecsConfig();
+        config.newChannelsOnly = false;
         config.minItems = 5;
 
         List<Seed> seeds = Arrays.asList(seed("s1", "A", 1), seed("s2", "B", 0.9), seed("s3", "A", 0.2));

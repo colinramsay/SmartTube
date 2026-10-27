@@ -4,8 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Default on-device ranker: a weighted mix of channel affinity, co-occurrence with seeds and freshness.
- * Each part is scaled to 0..1 before mixing.
+ * Default on-device ranker: a weighted mix of a channel score, co-occurrence with seeds and freshness.
+ * Each part is scaled to 0..1 before mixing. The channel score is affinity for channels the user
+ * knows and the discovery score for new ones.
  */
 public class HeuristicRanker implements Ranker {
     private static final double DAY_MS = 24 * 60 * 60 * 1000.0;
@@ -14,6 +15,7 @@ public class HeuristicRanker implements Ranker {
     public List<ScoredCandidate> score(RankingContext context, List<Candidate> candidates) {
         RecsConfig config = context.config;
         double maxAffinity = context.affinity.max();
+        double maxDiscovery = context.discovery.max();
         double maxCoOccurrence = 0;
 
         for (Candidate candidate : candidates) {
@@ -23,11 +25,13 @@ public class HeuristicRanker implements Ranker {
         List<ScoredCandidate> result = new ArrayList<>(candidates.size());
 
         for (Candidate candidate : candidates) {
-            double affinity = maxAffinity > 0 ? context.affinity.get(candidate.channelKey()) / maxAffinity : 0;
+            double channel = context.isKnownChannel(candidate) ?
+                    scaled(context.affinity.get(candidate.channelKey()), maxAffinity) :
+                    scaled(context.discovery.get(candidate.channelKey()), maxDiscovery) * config.newChannelScoreFactor;
             double coOccurrence = maxCoOccurrence > 0 ? coOccurrence(context, candidate) / maxCoOccurrence : 0;
             double freshness = freshness(candidate.publishedMs, context.nowMs, config);
 
-            double score = config.affinityWeight * affinity
+            double score = config.affinityWeight * channel
                     + config.coOccurrenceWeight * coOccurrence
                     + config.freshnessWeight * freshness;
 
@@ -35,6 +39,10 @@ public class HeuristicRanker implements Ranker {
         }
 
         return result;
+    }
+
+    private static double scaled(double value, double max) {
+        return max > 0 ? value / max : 0;
     }
 
     /**

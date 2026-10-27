@@ -15,11 +15,20 @@ public class CandidateFilter {
     private final Set<String> mWatchedIds;
     private final Blocklist mBlocklist;
     private final RecsConfig mConfig;
+    private Set<String> mExcludedChannels = Collections.emptySet();
 
     public CandidateFilter(Set<String> watchedIds, Blocklist blocklist, RecsConfig config) {
         mWatchedIds = watchedIds != null ? watchedIds : Collections.emptySet();
         mBlocklist = blocklist != null ? blocklist : new Blocklist();
         mConfig = config != null ? config : new RecsConfig();
+    }
+
+    /**
+     * Also drop every video from these channels (id or name keys, see {@link ChannelAffinity#addKeys}).
+     */
+    public CandidateFilter excludeChannels(Set<String> channelKeys) {
+        mExcludedChannels = channelKeys != null ? channelKeys : Collections.emptySet();
+        return this;
     }
 
     /**
@@ -55,7 +64,8 @@ public class CandidateFilter {
 
     public boolean isAllowed(Candidate candidate) {
         return !isWatched(candidate) && !isShorts(candidate) && !candidate.isLive && !candidate.isUpcoming
-                && !mBlocklist.isBlocked(candidate);
+                && !mBlocklist.isBlocked(candidate)
+                && !ChannelAffinity.containsChannel(mExcludedChannels, candidate.channelId, candidate.channelName);
     }
 
     private boolean isWatched(Candidate candidate) {

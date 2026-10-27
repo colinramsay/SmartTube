@@ -17,11 +17,21 @@ public class RecsConfig {
     /** Base affinity for subscribed channels, smaller than a single fully watched recent seed. */
     public double subscriptionBaseScore = 0.25;
 
+    // Discovery
+    /** Only recommend channels the user has never watched or subscribed to. */
+    public boolean newChannelsOnly = true;
+    /** New channels found through related videos whose latest uploads we also fetch. */
+    public int discoveredChannels = 4;
+    /** In mixed mode, how a new channel's score compares to a known channel's affinity. */
+    public double newChannelScoreFactor = 0.8;
+
     // Candidates
+    /** Latest uploads from known channels. Only used when {@link #newChannelsOnly} is off. */
     public int rssChannels = 8;
-    public int relatedSeeds = 4;
+    public int relatedSeeds = 8;
 
     // Scoring
+    /** Weight of the channel score: affinity for known channels, discovery score for new ones. */
     public double affinityWeight = 0.45;
     public double coOccurrenceWeight = 0.35;
     public double freshnessWeight = 0.20;
