@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LOCALRECS: fork-only resources. Flavours override localrecs_updater_disabled to turn the updater off. -->
+<resources>
+    <bool name="localrecs_updater_disabled">false</bool>
+
+    <string name="localrecs_title" translatable="false">For You (Local)</string>
+    <string name="localrecs_enable" translatable="false">Show the For You (Local) row on Home</string>
+    <string name="localrecs_refresh_interval" translatable="false">Refresh interval</string>
+    <string name="localrecs_blocked_keywords" translatable="false">Hide titles containing</string>
+    <string name="localrecs_blocked_keywords_hint" translatable="false">Comma separated words, e.g. reaction, spoiler</string>
+    <string name="localrecs_refresh_now" translatable="false">Refresh now</string>
+    <string name="localrecs_refresh_started" translatable="false">Refreshing in the background. The row updates next time Home loads.</string>
+    <string name="localrecs_minutes" translatable="false">%d minutes</string>
+    <string name="localrecs_hours" translatable="false">%d hours</string>
+    <string name="localrecs_updates_disabled" translatable="false">Updates are turned off in this build. Install new versions with scripts/install-firetv.sh.</string>
+</resources>
