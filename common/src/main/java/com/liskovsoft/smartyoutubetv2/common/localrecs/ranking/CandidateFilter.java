@@ -64,7 +64,7 @@ public class CandidateFilter {
 
     public boolean isAllowed(Candidate candidate) {
         return !isWatched(candidate) && !isShorts(candidate) && !candidate.isLive && !candidate.isUpcoming && !candidate.isMovie
-                && !isTooObscure(candidate)
+                && !isTooObscure(candidate) && !isTooLong(candidate) && hasVisibleTitle(candidate.title)
                 && !mBlocklist.isBlocked(candidate)
                 && !ChannelAffinity.containsChannel(mExcludedChannels, candidate.channelId, candidate.channelName);
     }
@@ -78,6 +78,46 @@ public class CandidateFilter {
      */
     private boolean isTooObscure(Candidate candidate) {
         return candidate.viewCount >= 0 && candidate.viewCount < mConfig.minViewCount;
+    }
+
+    private boolean isTooLong(Candidate candidate) {
+        return mConfig.maxDurationMs > 0 && candidate.durationMs > mConfig.maxDurationMs;
+    }
+
+    /**
+     * False for titles made only of blank-looking characters. Some channels use Hangul fillers
+     * (they count as letters) or braille blanks to get an "empty" title.
+     */
+    static boolean hasVisibleTitle(String title) {
+        if (title == null) {
+            return false;
+        }
+
+        int visible = 0;
+
+        for (int i = 0; i < title.length(); ) {
+            int codePoint = title.codePointAt(i);
+            i += Character.charCount(codePoint);
+
+            if (!isBlankLooking(codePoint) && Character.isLetterOrDigit(codePoint)) {
+                visible++;
+            }
+        }
+
+        return visible >= 2;
+    }
+
+    private static boolean isBlankLooking(int codePoint) {
+        switch (codePoint) {
+            case 0x115F: // Hangul choseong filler
+            case 0x1160: // Hangul jungseong filler
+            case 0x3164: // Hangul filler
+            case 0xFFA0: // halfwidth Hangul filler
+            case 0x2800: // braille blank
+                return true;
+            default:
+                return false;
+        }
     }
 
     private boolean isShorts(Candidate candidate) {

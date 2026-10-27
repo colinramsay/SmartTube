@@ -48,6 +48,37 @@ public class RealDataTest {
     }
 
     @Test
+    public void paddedSubscriptionNameStillMatches() {
+        Set<String> known = new HashSet<>();
+        ChannelAffinity.addKeys(known, null, "Joshua Weissman Recipes ");
+
+        assertTrue(ChannelAffinity.containsChannel(known, null, "Joshua Weissman Recipes"));
+    }
+
+    @Test
+    public void dropsBlankLookingTitles() {
+        assertFalse(CandidateFilter.hasVisibleTitle("ㅤㅤㅤㅤ ㅤㅤ"));
+        assertFalse(CandidateFilter.hasVisibleTitle("⠀⠀ ."));
+        assertFalse(CandidateFilter.hasVisibleTitle(null));
+        assertTrue(CandidateFilter.hasVisibleTitle("CMAT: Tiny Desk Concert"));
+        assertTrue(CandidateFilter.hasVisibleTitle("교토의 작은 찻집"));
+    }
+
+    @Test
+    public void dropsVideosOverTheLengthLimit() {
+        Candidate ambience = new Candidate("v1", null, "Brumbleberry", "A Tiny Spider Knits");
+        ambience.durationMs = 183 * 60_000L;
+        Candidate documentary = new Candidate("v2", null, "RAINBOLT", "solving a 4 year internet mystery");
+        documentary.durationMs = 86 * 60_000L;
+
+        assertEquals(Collections.singletonList("v2"),
+                ids(new CandidateFilter(null, null, mConfig).apply(Arrays.asList(ambience, documentary))));
+
+        mConfig.maxDurationMs = 0;
+        assertEquals(2, new CandidateFilter(null, null, mConfig).apply(Arrays.asList(ambience, documentary)).size());
+    }
+
+    @Test
     public void collabCountsAsKnownWhenAnyChannelInItIsKnown() {
         Set<String> known = new HashSet<>();
         ChannelAffinity.addKeys(known, null, "JackSucksAtGeography");

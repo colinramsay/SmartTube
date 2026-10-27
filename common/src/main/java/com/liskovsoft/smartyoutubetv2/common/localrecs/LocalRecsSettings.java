@@ -20,6 +20,7 @@ public class LocalRecsSettings {
     private static final long MINUTE_MS = 60 * 1000L;
     private static final long HOUR_MS = 60 * MINUTE_MS;
     private static final long[] TTL_OPTIONS_MS = {30 * MINUTE_MS, HOUR_MS, 2 * HOUR_MS, 4 * HOUR_MS, 12 * HOUR_MS};
+    private static final long[] MAX_LENGTH_OPTIONS_MS = {30 * MINUTE_MS, HOUR_MS, 2 * HOUR_MS, 3 * HOUR_MS, 0};
 
     /**
      * Adds a single button that opens the feature's own settings dialog.
@@ -27,6 +28,14 @@ public class LocalRecsSettings {
     public static void append(Context context, AppDialogPresenter settingsPresenter) {
         settingsPresenter.appendSingleButton(UiOptionItem.from(context.getString(R.string.localrecs_title),
                 option -> showDialog(context)));
+    }
+
+    private static String formatLength(Context context, long ms) {
+        if (ms < HOUR_MS) {
+            return context.getString(R.string.localrecs_minutes, ms / MINUTE_MS);
+        }
+
+        return ms == HOUR_MS ? context.getString(R.string.localrecs_one_hour) : context.getString(R.string.localrecs_hours, ms / HOUR_MS);
     }
 
     private static void showDialog(Context context) {
@@ -44,12 +53,17 @@ public class LocalRecsSettings {
 
         List<OptionItem> ttlOptions = new ArrayList<>();
         for (long ttlMs : TTL_OPTIONS_MS) {
-            String title = ttlMs < HOUR_MS ?
-                    context.getString(R.string.localrecs_minutes, ttlMs / MINUTE_MS) :
-                    context.getString(R.string.localrecs_hours, ttlMs / HOUR_MS);
+            String title = formatLength(context, ttlMs);
             ttlOptions.add(UiOptionItem.from(title, option -> data.setTtlMs(ttlMs), data.getTtlMs() == ttlMs));
         }
         dialog.appendRadioCategory(context.getString(R.string.localrecs_refresh_interval), ttlOptions);
+
+        List<OptionItem> lengthOptions = new ArrayList<>();
+        for (long maxMs : MAX_LENGTH_OPTIONS_MS) {
+            String title = maxMs == 0 ? context.getString(R.string.localrecs_no_limit) : formatLength(context, maxMs);
+            lengthOptions.add(UiOptionItem.from(title, option -> data.setMaxDurationMs(maxMs), data.getMaxDurationMs() == maxMs));
+        }
+        dialog.appendRadioCategory(context.getString(R.string.localrecs_max_length), lengthOptions);
 
         dialog.appendSingleButton(UiOptionItem.from(context.getString(R.string.localrecs_blocked_keywords),
                 option -> SimpleEditDialog.show(context,

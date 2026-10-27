@@ -67,7 +67,7 @@ public class LocalRecsEngine {
     private static final long FIRST_RUN_WAIT_MS = 6_000;
     /** Don't hammer YouTube when refreshes keep producing nothing (e.g. empty history). */
     private static final long MIN_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
-    private static final int MAX_CALLS_PER_REFRESH = 18;
+    private static final int MAX_CALLS_PER_REFRESH = 20;
     /** RSS feeds for a batch are fetched in parallel by the service, so this bounds concurrency too. */
     private static final int RSS_BATCH_SIZE = 4;
     private static final int METADATA_CONCURRENCY = 2;
@@ -266,6 +266,7 @@ public class LocalRecsEngine {
         VideoStateService stateService = VideoStateService.instance(mContext);
         ChannelResolver resolver = new ChannelResolver();
         mConfig.newChannelsOnly = mData.isNewChannelsOnly();
+        mConfig.maxDurationMs = mData.getMaxDurationMs();
         Feedback feedback = loadFeedback();
 
         // Fetch everything first, so channel ids seen on one item can fill gaps on another (see ChannelResolver)
@@ -281,9 +282,13 @@ public class LocalRecsEngine {
             return Collections.emptyList();
         }
 
+        // The first history page is often short, so seeds can come from the second page too
+        List<MediaItem> allHistory = new ArrayList<>(historyItems);
+        allHistory.addAll(olderHistoryItems);
+
         // Related videos only need seed video ids, so fetch them before resolving channels
         List<Seed> rawSeeds = new ArrayList<>();
-        for (MediaItem item : historyItems) {
+        for (MediaItem item : allHistory) {
             if (rawSeeds.size() >= mConfig.maxSeeds) {
                 break;
             }
@@ -300,7 +305,7 @@ public class LocalRecsEngine {
         Set<String> knownChannels = new HashSet<>();
         List<Seed> seeds = new ArrayList<>();
 
-        for (MediaItem item : historyItems) {
+        for (MediaItem item : allHistory) {
             String name = channelName(item);
             String channelId = resolver.resolveId(item.getChannelId(), name);
             excludedIds.add(item.getVideoId());
@@ -311,12 +316,6 @@ public class LocalRecsEngine {
                 seed.feedbackFactor = feedback.seedMultiplier(seed.videoId);
                 seeds.add(seed);
             }
-        }
-
-        for (MediaItem item : olderHistoryItems) {
-            String name = channelName(item);
-            excludedIds.add(item.getVideoId());
-            ChannelAffinity.addKeys(knownChannels, resolver.resolveId(item.getChannelId(), name), name);
         }
 
         addLocalChannels(knownChannels, stateService, resolver);
@@ -366,10 +365,17 @@ public class LocalRecsEngine {
         ChannelAffinity discovery = ChannelDiscovery.compute(seeds, candidates, skipForDiscovery, mConfig);
 
         // Latest uploads from the best new channels, plus from favourite channels when those are allowed
-        addRssCandidates(contentService, discovery.topChannelIds(mConfig.discoveredChannels), candidates, budget, resolver);
+        addRssCandidates(contentService, discoveredChannelIds(itemService, discovery, candidates, resolver, budget), candidates, budget, resolver);
 
         if (!mConfig.newChannelsOnly) {
             addRssCandidates(contentService, affinity.topChannelIds(mConfig.rssChannels), candidates, budget, resolver);
+        }
+
+        // Now that more ids are known, give every candidate one consistent channel key for the per-channel caps
+        for (Candidate candidate : candidates) {
+            if (candidate.channelId == null) {
+                candidate.channelId = resolver.resolveId(null, candidate.channelName);
+            }
         }
 
         // 4-7. Filter, score, diversify
@@ -401,8 +407,9 @@ public class LocalRecsEngine {
 
             sb.append("\nSeeds (").append(seeds.size()).append("):\n");
             for (Seed seed : seeds) {
-                sb.append("  ").append(seed.channelName).append(" [").append(seed.channelId).append("] completion ")
-                        .append(String.format(Locale.US, "%.2f", seed.completion)).append('\n');
+                sb.append("  ").append(seed.videoId).append(" ").append(seed.channelName).append(" completion ")
+                        .append(String.format(Locale.US, "%.2f", seed.completion)).append(" feedback ")
+                        .append(String.format(Locale.US, "%.2f", seed.feedbackFactor)).append('\n');
             }
 
             sb.append("\nSubscriptions (").append(subscribedKeys.size()).append("): ").append(subscribedKeys).append('\n');
@@ -421,7 +428,7 @@ public class LocalRecsEngine {
             sb.append("\nRow (").append(row.size()).append(" of ").append(candidateCount).append(" candidates):\n");
             for (Candidate candidate : row) {
                 sb.append("  ").append(candidate.channelName).append(" [").append(candidate.channelId).append("] views ")
-                        .append(candidate.viewCount).append(", seeds ").append(candidate.relatedSeedIds.size())
+                        .append(candidate.viewCount).append(", ").append(candidate.durationMs / 60_000).append(" min, seeds ").append(candidate.relatedSeedIds.size())
                         .append(candidate.fromRss ? ", rss" : "").append(" | ").append(candidate.title).append('\n');
             }
 
@@ -458,6 +465,52 @@ public class LocalRecsEngine {
         }
     }
 
+    /**
+     * Channel ids for the best new channels, so their latest uploads can be fetched.
+     * TV tiles rarely carry a channel id, so for channels known only by name we open one of their
+     * videos (one request each) and read the id from its page.
+     */
+    private List<String> discoveredChannelIds(MediaItemService itemService, ChannelAffinity discovery,
+                                              List<Candidate> candidates, ChannelResolver resolver, AtomicInteger budget) {
+        List<String> result = new ArrayList<>();
+        List<String> lookups = new ArrayList<>();
+
+        for (String key : discovery.topKeys(mConfig.discoveredChannels)) {
+            if (!key.startsWith("name:")) {
+                result.add(key);
+                continue;
+            }
+
+            for (Candidate candidate : candidates) {
+                if (key.equals(candidate.channelKey())) {
+                    lookups.add(candidate.videoId);
+                    break;
+                }
+            }
+        }
+
+        List<MediaItemMetadata> pages = Observable.fromIterable(lookups)
+                .flatMap(videoId -> Observable.fromCallable(() -> {
+                            MediaItemMetadata metadata = call(budget, () -> itemService.getMetadata(videoId));
+                            return metadata != null ? Collections.singletonList(metadata) : Collections.<MediaItemMetadata>emptyList();
+                        })
+                        .subscribeOn(Schedulers.io())
+                        .flatMapIterable(list -> list),
+                        METADATA_CONCURRENCY)
+                .toList()
+                .onErrorReturnItem(Collections.emptyList())
+                .blockingGet();
+
+        for (MediaItemMetadata metadata : pages) {
+            if (metadata.getChannelId() != null) {
+                resolver.learn(metadata.getChannelId(), metadata.getAuthor());
+                result.add(metadata.getChannelId());
+            }
+        }
+
+        return result;
+    }
+
     private void addRssCandidates(ContentService contentService, List<String> channelIds, List<Candidate> candidates,
                                   AtomicInteger budget, ChannelResolver resolver) {
         for (int i = 0; i < channelIds.size(); i += RSS_BATCH_SIZE) {
@@ -484,9 +537,19 @@ public class LocalRecsEngine {
     }
 
     private List<Seed> strongestSeeds(List<Seed> seeds) {
+        // Videos abandoned early say little about taste, so they don't lead to related videos
         List<Integer> order = new ArrayList<>();
         for (int i = 0; i < seeds.size(); i++) {
-            order.add(i);
+            double completion = seeds.get(i).completion;
+            if (completion < 0 || completion >= mConfig.minRelatedSeedCompletion) {
+                order.add(i);
+            }
+        }
+
+        if (order.isEmpty()) {
+            for (int i = 0; i < seeds.size(); i++) {
+                order.add(i);
+            }
         }
 
         Collections.sort(order, (a, b) -> Double.compare(
@@ -557,6 +620,7 @@ public class LocalRecsEngine {
      * Cached items, minus anything watched or blocked since the row was built.
      */
     private List<MediaGroup> fromCache(CachedRow cached) {
+        mConfig.maxDurationMs = mData.getMaxDurationMs();
         Set<String> watchedIds = localWatchedIds(VideoStateService.instance(mContext));
         watchedIds.addAll(loadFeedback().removedVideoIds());
         CandidateFilter filter = new CandidateFilter(watchedIds, createBlocklist(), mConfig);

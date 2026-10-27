@@ -21,7 +21,7 @@ public class RecsConfig {
     /** Only recommend channels the user has never watched or subscribed to. */
     public boolean newChannelsOnly = true;
     /** New channels found through related videos whose latest uploads we also fetch. */
-    public int discoveredChannels = 4;
+    public int discoveredChannels = 6;
     /** In mixed mode, how a new channel's score compares to a known channel's affinity. */
     public double newChannelScoreFactor = 0.8;
 
@@ -29,6 +29,8 @@ public class RecsConfig {
     /** Latest uploads from known channels. Only used when {@link #newChannelsOnly} is off. */
     public int rssChannels = 8;
     public int relatedSeeds = 8;
+    /** Videos watched less than this fraction of the way don't lead to related videos. */
+    public double minRelatedSeedCompletion = 0.3;
 
     // Scoring
     /** Weight of the channel score: affinity for known channels, discovery score for new ones. */
@@ -43,6 +45,8 @@ public class RecsConfig {
     public int watchedPercentThreshold = 20;
     /** Fallback Shorts detection when the item has no Shorts flag. */
     public long shortsMaxDurationMs = 60_000;
+    /** Hide videos longer than this, when the length is known. 0 turns it off. */
+    public long maxDurationMs = 2 * 60 * 60 * 1000L;
     /** Hide videos with fewer views than this, when the view count is known. */
     public long minViewCount = 1000;
 

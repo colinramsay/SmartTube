@@ -12,6 +12,7 @@ import com.liskovsoft.smartyoutubetv2.common.prefs.AppPrefs;
 public class LocalRecsData {
     private static final String KEY_ENABLED = "localrecs_enabled";
     private static final String KEY_NEW_CHANNELS_ONLY = "localrecs_new_channels_only";
+    private static final String KEY_MAX_DURATION_MS = "localrecs_max_duration_ms";
     private static final String KEY_TTL_MS = "localrecs_ttl_ms";
     private static final String KEY_KEYWORDS = "localrecs_blocked_keywords";
     private static final String KEY_CACHE = "localrecs_cache";
@@ -51,6 +52,17 @@ public class LocalRecsData {
 
     public void setNewChannelsOnly(boolean newChannelsOnly) {
         mPrefs.putBoolean(KEY_NEW_CHANNELS_ONLY, newChannelsOnly);
+    }
+
+    /**
+     * Videos longer than this are left out of the row. 0 means no limit.
+     */
+    public long getMaxDurationMs() {
+        return mPrefs.getLong(KEY_MAX_DURATION_MS, 2 * 60 * 60 * 1000L);
+    }
+
+    public void setMaxDurationMs(long maxDurationMs) {
+        mPrefs.putLong(KEY_MAX_DURATION_MS, maxDurationMs);
     }
 
     public long getTtlMs() {

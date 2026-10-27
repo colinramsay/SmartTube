@@ -26,8 +26,8 @@ public class HeuristicRanker implements Ranker {
 
         for (Candidate candidate : candidates) {
             double channel = context.isKnownChannel(candidate) ?
-                    scaled(context.affinity.get(candidate.channelKey()), maxAffinity) :
-                    scaled(context.discovery.get(candidate.channelKey()), maxDiscovery) * config.newChannelScoreFactor;
+                    scaled(context.affinity.getFor(candidate.channelId, candidate.channelName), maxAffinity) :
+                    scaled(context.discovery.getFor(candidate.channelId, candidate.channelName), maxDiscovery) * config.newChannelScoreFactor;
             double coOccurrence = maxCoOccurrence > 0 ? coOccurrence(context, candidate) / maxCoOccurrence : 0;
             double freshness = freshness(candidate.publishedMs, context.nowMs, config);
 

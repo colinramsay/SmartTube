@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -49,12 +50,13 @@ public class ChannelAffinity {
     }
 
     public static String keyOf(String channelId, String channelName) {
-        if (channelId != null && !channelId.isEmpty()) {
-            return channelId;
+        if (channelId != null && !channelId.trim().isEmpty()) {
+            return channelId.trim();
         }
 
-        if (channelName != null && !channelName.isEmpty()) {
-            return "name:" + channelName.toLowerCase();
+        // Trimmed because YouTube sometimes pads names, e.g. "Joshua Weissman Recipes " in subscriptions
+        if (channelName != null && !channelName.trim().isEmpty()) {
+            return "name:" + channelName.trim().toLowerCase(Locale.ROOT);
         }
 
         return null;
@@ -120,6 +122,15 @@ public class ChannelAffinity {
     public void add(String channelKey, double score) {
         Double current = mScores.get(channelKey);
         mScores.put(channelKey, current == null ? score : current + score);
+    }
+
+    /**
+     * Score for a channel stored under either its id or its name, whichever is higher.
+     */
+    public double getFor(String channelId, String channelName) {
+        double byId = channelId != null ? get(keyOf(channelId, null)) : 0;
+        double byName = channelName != null ? get(keyOf(null, channelName)) : 0;
+        return Math.max(byId, byName);
     }
 
     public double get(String channelKey) {
