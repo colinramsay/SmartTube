@@ -69,7 +69,7 @@ The code is in `common/src/main/java/com/liskovsoft/smartyoutubetv2/common/local
 The row is built for discovery. By default it only suggests channels you have never watched or subscribed to.
 
 1. Seeds are the last 20 videos in your YouTube history. Recent videos count for more, and so do videos you finished. Completion comes from local playback state when we have it, otherwise from YouTube's progress bar.
-2. Known channels are every channel in your history, your subscriptions and SmartTube's local playback history.
+2. Known channels are every channel in the first two pages of your history, your subscriptions and SmartTube's local playback history. TV tiles often leave out the channel id, so ids are filled in from other tiles of the same channel by name.
 3. We fetch YouTube's related videos for the 8 strongest seeds. A new channel scores the sum of the weights of the distinct seeds it turned up next to. So a channel that appears beside five different videos you liked beats one that appears five times beside a single video.
 4. We also fetch the latest uploads (RSS) from the 4 best new channels, so the row isn't limited to what YouTube chose to put in its related lists.
 5. Each candidate gets a score that mixes that channel score, how many seeds it was related to, and how new it is.
@@ -81,7 +81,7 @@ If you turn off "Only suggest channels I haven't watched", the row becomes a mix
 
 The scoring code in `localrecs/ranking` and `localrecs/cache` is plain Java with no Android or network calls, and the unit tests cover it. `Ranker` is the place to plug in a different ranker later. Diversity rules run after it, so a new ranker only has to score relevance.
 
-When Home loads, the cached row shows straight away. If it's older than the refresh interval (2 hours by default), a refresh runs in the background and the new row appears on the next Home load. The one exception is the very first run, when there's no cache yet. Home then waits up to 6 seconds for the first refresh before it carries on without the row. A refresh makes at most 16 service calls, runs 2 related-video lookups at a time, gives each call 10 seconds and the whole refresh 60. Any error is logged and the row is skipped. Home itself never fails because of it.
+When Home loads, the cached row shows straight away. If it's older than the refresh interval (2 hours by default), a refresh runs in the background and the new row appears on the next Home load. The one exception is the very first run, when there's no cache yet. Home then waits up to 6 seconds for the first refresh before it carries on without the row. A refresh makes at most 18 service calls, runs 2 related-video lookups at a time, gives each call 10 seconds and the whole refresh 60. Any error is logged and the row is skipped. Home itself never fails because of it.
 
 Signed-out users get no row, because there's no history to seed it. The row also hides when the device is offline.
 
