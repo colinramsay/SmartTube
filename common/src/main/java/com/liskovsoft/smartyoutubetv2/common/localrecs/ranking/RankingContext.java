@@ -20,6 +20,8 @@ public class RankingContext {
     public final long nowMs;
     /** What the user removed from the row before. Empty unless set. */
     public Feedback feedback;
+    /** How long the videos you finish usually are. Unknown unless set. */
+    public LengthPreference length = LengthPreference.unknown();
     private final Map<String, Double> mSeedWeights = new HashMap<>();
 
     /**

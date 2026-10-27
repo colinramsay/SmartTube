@@ -34,7 +34,8 @@ public class HeuristicRanker implements Ranker {
             double score = (config.affinityWeight * channel
                     + config.coOccurrenceWeight * coOccurrence
                     + config.freshnessWeight * freshness)
-                    * context.feedback.channelMultiplier(candidate.channelId, candidate.channelName);
+                    * context.feedback.channelMultiplier(candidate.channelId, candidate.channelName)
+                    * context.length.factor(candidate.durationMs);
 
             result.add(new ScoredCandidate(candidate, score));
         }

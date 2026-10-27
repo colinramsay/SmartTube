@@ -13,7 +13,11 @@
     <string name="localrecs_jev_enabled" translatable="false">Let Jev judge suggestions</string>
     <string name="localrecs_left_field_enabled" translatable="false">Show the Left Field row (needs both keys)</string>
     <string name="localrecs_new_ideas" translatable="false">Generate new Left Field ideas now</string>
-    <string name="localrecs_new_ideas_started" translatable="false">Asking Claude for ideas. The Left Field row updates in a minute or two.</string>
+    <string name="localrecs_new_ideas_started" translatable="false">Asking Claude for 20 new ideas. Home updates in two or three minutes.</string>
+    <string name="localrecs_rows_updated" translatable="false">For You and Left Field updated</string>
+    <string name="localrecs_refresh_failed" translatable="false">Couldn\'t refresh For You. Try again in a minute.</string>
+    <string name="localrecs_ideas_failed" translatable="false">Couldn\'t get new Left Field ideas. Check the Anthropic key.</string>
+    <string name="localrecs_left_field_needs_keys" translatable="false">Left Field needs both API keys set and both switches on.</string>
     <string name="localrecs_current_ideas" translatable="false">Current Left Field ideas</string>
     <string name="localrecs_key_saved" translatable="false">Key saved</string>
     <string name="localrecs_enable" translatable="false">Show the For You row on Home</string>
@@ -28,7 +32,7 @@
     <string name="localrecs_max_length" translatable="false">Hide videos longer than</string>
     <string name="localrecs_no_limit" translatable="false">No limit</string>
     <string name="localrecs_refresh_now" translatable="false">Refresh now</string>
-    <string name="localrecs_refresh_started" translatable="false">Refreshing in the background. The row updates next time Home loads.</string>
+    <string name="localrecs_refresh_started" translatable="false">Refreshing. Home updates in about a minute.</string>
     <string name="localrecs_minutes" translatable="false">%d minutes</string>
     <string name="localrecs_one_hour" translatable="false">1 hour</string>
     <string name="localrecs_hours" translatable="false">%d hours</string>

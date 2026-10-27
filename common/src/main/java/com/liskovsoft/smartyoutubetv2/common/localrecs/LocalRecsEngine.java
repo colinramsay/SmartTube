@@ -18,6 +18,9 @@ import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.smartyoutubetv2.common.R;
 import com.liskovsoft.smartyoutubetv2.common.app.models.data.Video;
 import com.liskovsoft.smartyoutubetv2.common.app.models.playback.service.VideoStateService;
+import com.liskovsoft.smartyoutubetv2.common.app.presenters.BrowsePresenter;
+import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
+import com.liskovsoft.sharedutils.helpers.MessageHelpers;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ai.JevClient;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ai.LeapGenerator;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.cache.CachePolicy;
@@ -33,6 +36,7 @@ import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.HeuristicRanker;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Judgment;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Leap;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.LeftFieldAssembler;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.LengthPreference;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Outcomes;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Ranker;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.RankingContext;
@@ -107,6 +111,12 @@ public class LocalRecsEngine {
     private long mLastLeapAttemptMs;
     private boolean mForceNewLeaps;
     private boolean mRefreshPending;
+    /** Reload Home when the current refresh finishes, because the user asked for it. */
+    private volatile boolean mShowWhenDone;
+    /** Reload Home once the requested new ideas have arrived and been used. */
+    private volatile boolean mShowAfterNewLeaps;
+    /** Same, for the refresh queued behind the one that's running. */
+    private boolean mShowPendingWhenDone;
     private final Context mContext;
     private final LocalRecsData mData;
     private final RecsConfig mConfig = new RecsConfig();
@@ -116,6 +126,7 @@ public class LocalRecsEngine {
     /** How the last quick first pass went, for the diagnostics. */
     private volatile String mQuickPassNote = "not run";
     private volatile String mQuickPassRunNote = "";
+    private LengthPreference mLastLength = LengthPreference.unknown();
     private long mLastDisplayRecordMs;
 
     private LocalRecsEngine(Context context) {
@@ -155,6 +166,14 @@ public class LocalRecsEngine {
     public void refreshNow() {
         mLastRefreshStartMs = 0;
         startRefresh();
+    }
+
+    /**
+     * "Refresh now" in settings: you asked, so when it's done Home reloads to show the new rows.
+     */
+    public void refreshFromSettings() {
+        mShowWhenDone = true;
+        refreshNow();
     }
 
     /**
@@ -232,6 +251,7 @@ public class LocalRecsEngine {
      * Ask Claude for fresh Left Field ideas on the next refresh, and start that refresh now.
      */
     public void requestNewLeaps() {
+        mShowAfterNewLeaps = true;
         mForceNewLeaps = true;
         mLastLeapAttemptMs = 0;
         refreshNow();
@@ -322,8 +342,16 @@ public class LocalRecsEngine {
     private synchronized void onRefreshDone() {
         mRefresh = null;
 
+        // A refresh the user asked for that produced nothing: say so rather than stay silent
+        if (mShowWhenDone && !mRefreshPending) {
+            mShowWhenDone = false;
+            tell(R.string.localrecs_refresh_failed);
+        }
+
         if (mRefreshPending) {
             mRefreshPending = false;
+            mShowWhenDone = mShowPendingWhenDone;
+            mShowPendingWhenDone = false;
             mLastRefreshStartMs = 0;
             Schedulers.io().scheduleDirect(this::startRefresh);
         }
@@ -332,10 +360,12 @@ public class LocalRecsEngine {
     /**
      * Refresh now, or straight after the refresh that's running.
      */
-    private synchronized void refreshSoon() {
+    private synchronized void refreshSoon(boolean showWhenDone) {
         if (mRefresh != null) {
             mRefreshPending = true;
+            mShowPendingWhenDone |= showWhenDone;
         } else {
+            mShowWhenDone |= showWhenDone;
             refreshNow();
         }
     }
@@ -371,6 +401,10 @@ public class LocalRecsEngine {
         }
 
         Log.d(TAG, "Refreshed %s + %s items in %s ms%s", main.size(), result.leftField.size(), System.currentTimeMillis() - startMs, quick ? " (quick pass)" : "");
+        if (!quick && mShowWhenDone) {
+            mShowWhenDone = false;
+            showOnHome();
+        }
         if (quick) {
             mQuickPassRunNote = "finished in " + (System.currentTimeMillis() - startMs) + " ms with " + main.size() + " videos";
         }
@@ -411,6 +445,24 @@ public class LocalRecsEngine {
         Outcomes outcomes = Outcomes.decode(mData.getOutcomes());
         outcomes.recordPlayback(playback);
         mData.setOutcomes(outcomes.encode());
+    }
+
+    /**
+     * Reload Home with the new rows, for refreshes the user asked for. Automatic refreshes never do
+     * this, so rows don't change under you while you browse.
+     */
+    private void showOnHome() {
+        Utils.post(() -> {
+            BrowsePresenter presenter = BrowsePresenter.instance(mContext);
+            if (presenter.isHomeSection()) {
+                presenter.refresh(false);
+            }
+            MessageHelpers.showMessage(mContext, R.string.localrecs_rows_updated);
+        });
+    }
+
+    private void tell(int messageResId) {
+        Utils.post(() -> MessageHelpers.showMessage(mContext, messageResId));
     }
 
     private static class Rows {
@@ -574,6 +626,14 @@ public class LocalRecsEngine {
             }
         }
 
+        // Learn how long the videos you finish usually are; far longer ones are dropped, longer ones score less
+        LengthPreference length = LengthPreference.fromFinished(finishedDurations(stateService, allHistory));
+        long dropAbove = length.dropAboveMs();
+        if (dropAbove > 0 && (mConfig.maxDurationMs == 0 || dropAbove < mConfig.maxDurationMs)) {
+            mConfig.maxDurationMs = dropAbove;
+        }
+        mLastLength = length;
+
         // 4-7. Filter, score, diversify
         excludedIds.addAll(feedback.removedVideoIds());
         excludedIds.addAll(outcomes.ignoredVideoIds(IGNORED_AFTER_SHOWS));
@@ -582,6 +642,7 @@ public class LocalRecsEngine {
 
         RankingContext context = new RankingContext(seeds, affinity, discovery, knownChannels, mConfig, System.currentTimeMillis());
         context.feedback = feedback;
+        context.length = length;
         List<ScoredCandidate> scored = mRanker.score(context, filter.apply(candidates));
 
         // Model step 1: Jev reads the best candidates against examples of what you finish and drop
@@ -614,7 +675,7 @@ public class LocalRecsEngine {
         if (mData.isLeftFieldEnabled() && !quick) {
             leaps = activeLeaps(feedback, outcomes);
             if (leaps != null) {
-                rows.leftField = buildLeftField(contentService, jev, viewer, leaps, leftFieldExcluded, leftFieldSkipChannels, resolver);
+                rows.leftField = buildLeftField(contentService, jev, viewer, leaps, leftFieldExcluded, leftFieldSkipChannels, resolver, length);
             }
             maybeGenerateLeaps(seeds, feedback, outcomes, subscriptions, leaps);
         }
@@ -706,7 +767,8 @@ public class LocalRecsEngine {
      * then take turns between ideas.
      */
     private List<Candidate> buildLeftField(ContentService contentService, JevClient jev, JevClient.Viewer viewer, Leap.Batch leaps,
-                                           Set<String> excludedIds, Set<String> skipChannels, ChannelResolver resolver) {
+                                           Set<String> excludedIds, Set<String> skipChannels, ChannelResolver resolver,
+                                           LengthPreference length) {
         if (jev == null) {
             return Collections.emptyList();
         }
@@ -741,7 +803,8 @@ public class LocalRecsEngine {
         Map<String, Judgment> judgments = jev.judgeForLeftField(allowed, viewer, leapByVideoId);
         List<ScoredCandidate> scored = new ArrayList<>();
         for (Candidate candidate : allowed) {
-            scored.add(new ScoredCandidate(candidate, Judgment.leftFieldScore(judgments.get(candidate.videoId))));
+            double score = Judgment.leftFieldScore(judgments.get(candidate.videoId));
+            scored.add(new ScoredCandidate(candidate, score >= 0 ? score * length.factor(candidate.durationMs) : score));
         }
 
         return LeftFieldAssembler.assemble(scored, LEFT_FIELD_PER_LEAP, LEFT_FIELD_MAX);
@@ -826,7 +889,12 @@ public class LocalRecsEngine {
                     mData.setLeaps(new Leap.Batch(System.currentTimeMillis(), leaps, rejected).encode());
                     Log.d(TAG, "Got %s new Left Field ideas", leaps.size());
                     mGeneratingLeaps.set(false);
-                    refreshSoon();
+                    boolean show = mShowAfterNewLeaps;
+                    mShowAfterNewLeaps = false;
+                    refreshSoon(show);
+                } else if (mShowAfterNewLeaps) {
+                    mShowAfterNewLeaps = false;
+                    tell(R.string.localrecs_ideas_failed);
                 }
             } catch (RuntimeException e) {
                 Log.e(TAG, "Generating ideas failed: %s", e);
@@ -834,6 +902,31 @@ public class LocalRecsEngine {
                 mGeneratingLeaps.set(false);
             }
         });
+    }
+
+    /**
+     * Lengths of videos watched to the end: exact local progress where we have it, otherwise
+     * YouTube's progress bar on history.
+     */
+    private static List<Long> finishedDurations(VideoStateService stateService, List<MediaItem> history) {
+        Map<String, Long> result = new java.util.HashMap<>();
+
+        for (MediaItem item : history) {
+            if (item.getPercentWatched() >= Outcomes.FINISHED * 100 && item.getDurationMs() > 0) {
+                result.put(item.getVideoId(), item.getDurationMs());
+            }
+        }
+
+        if (stateService != null) {
+            for (VideoStateService.State state : new ArrayList<>(stateService.getStates())) {
+                if (state != null && state.video != null && state.durationMs > 0
+                        && (double) state.positionMs / state.durationMs >= Outcomes.FINISHED) {
+                    result.put(state.video.videoId, state.durationMs);
+                }
+            }
+        }
+
+        return new ArrayList<>(result.values());
     }
 
     private static Map<String, Double> playbackOf(VideoStateService stateService, List<MediaItem> history) {
@@ -949,6 +1042,9 @@ public class LocalRecsEngine {
             StringBuilder sb = new StringBuilder();
             sb.append("Refreshed ").append(new java.util.Date()).append(", mode ")
                     .append(mConfig.newChannelsOnly ? "new channels only" : "mixed").append('\n');
+            sb.append("Usual length: ").append(mLastLength.isKnown()
+                    ? (mLastLength.usualMaxMs() / 60_000) + " min or less for 9 in 10 finished videos (" + mLastLength.samples() + " videos), dropping over " + (mLastLength.dropAboveMs() / 60_000) + " min"
+                    : "not enough finished videos yet (" + mLastLength.samples() + ")").append('\n');
             sb.append("Quick first pass: ").append(mQuickPassNote).append("; ").append(mQuickPassRunNote).append('\n');
 
             sb.append("\nSeeds (").append(seeds.size()).append("):\n");

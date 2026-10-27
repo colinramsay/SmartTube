@@ -58,6 +58,10 @@ public class LocalRecsSettings {
                 option -> data.setLeftFieldEnabled(option.isSelected()), data.isLeftFieldSwitchOn()));
 
         dialog.appendSingleButton(UiOptionItem.from(context.getString(R.string.localrecs_new_ideas), option -> {
+            if (!data.isLeftFieldEnabled()) {
+                MessageHelpers.showMessage(context, R.string.localrecs_left_field_needs_keys);
+                return;
+            }
             engine.requestNewLeaps();
             MessageHelpers.showMessage(context, R.string.localrecs_new_ideas_started);
         }));
@@ -138,7 +142,7 @@ public class LocalRecsSettings {
         }
 
         dialog.appendSingleButton(UiOptionItem.from(context.getString(R.string.localrecs_refresh_now), option -> {
-            engine.refreshNow();
+            engine.refreshFromSettings();
             MessageHelpers.showMessage(context, R.string.localrecs_refresh_started);
         }));
 
