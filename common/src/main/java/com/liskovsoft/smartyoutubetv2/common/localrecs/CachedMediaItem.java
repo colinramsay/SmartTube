@@ -15,6 +15,10 @@ public class CachedMediaItem implements MediaItem {
         mItem = item;
     }
 
+    public CachedRow.Item getCacheItem() {
+        return mItem;
+    }
+
     public static CachedRow.Item toCacheItem(MediaItem item) {
         CachedRow.Item result = new CachedRow.Item();
         result.videoId = item.getVideoId();

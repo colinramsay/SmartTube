@@ -114,6 +114,18 @@ public class LearningTest {
         assertEquals(Arrays.asList("a1", "b2", "a2", "a3"), FilterTest.ids(row));
     }
 
+    @Test
+    public void leftFieldWithOneVideoPerIdeaIsBestFirstAndCapped() {
+        List<ScoredCandidate> scored = new java.util.ArrayList<>();
+        scored.add(leftField("a1", "CH1", "A", 0.5));
+        scored.add(leftField("a2", "CH2", "A", 0.9));
+        scored.add(leftField("b1", "CH3", "B", 0.8));
+        scored.add(leftField("c1", "CH4", "C", 0.6));
+
+        assertEquals(Arrays.asList("a2", "b1", "c1"), FilterTest.ids(LeftFieldAssembler.assemble(scored, 1, 10)));
+        assertEquals(Arrays.asList("a2", "b1"), FilterTest.ids(LeftFieldAssembler.assemble(scored, 1, 2)));
+    }
+
     private static ScoredCandidate leftField(String videoId, String channel, String leapId, double score) {
         Candidate candidate = video(videoId, channel);
         candidate.leapId = leapId;
@@ -140,15 +152,17 @@ public class LearningTest {
     public void leapsFailOrLandOnVerdicts() {
         Map<String, Integer> hits = new HashMap<>();
         Map<String, Integer> misses = new HashMap<>();
-        misses.put("bad", 2);
-        misses.put("mixed", 2);
-        hits.put("mixed", 2);
-        hits.put("good", 2);
+        misses.put("bad", 1);
+        misses.put("mixed", 1);
+        hits.put("mixed", 1);
+        hits.put("good", 1);
 
+        // One video per idea is on screen, so one verdict decides
         assertTrue(Leap.hasFailed("bad", hits, misses));
         assertFalse(Leap.hasFailed("mixed", hits, misses));
         assertFalse(Leap.hasFailed("new", hits, misses));
         assertTrue(Leap.hasLanded("good", hits));
+        assertFalse(Leap.hasLanded("new", hits));
     }
 
     @Test

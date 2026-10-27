@@ -30,7 +30,7 @@ public class LeapGenerator {
     private static final String URL = "https://api.anthropic.com/v1/messages";
     private static final String MODEL = "claude-opus-5";
     private static final MediaType JSON = MediaType.parse("application/json");
-    private static final int IDEAS = 8;
+    public static final int IDEAS = 20;
     private final OkHttpClient mClient;
     private final String mApiKey;
 
@@ -104,7 +104,8 @@ public class LeapGenerator {
                 + "Work out why they like what they finish, in terms of underlying appeal rather than subject "
                 + "(for example: patient craftsmanship, a strong sense of place, an expert's enthusiasm, clever "
                 + "puzzles, gentle humour). Then propose " + IDEAS + " topics that share those reasons but none "
-                + "of the subjects in their history. Make them genuinely varied and a little unexpected. Avoid "
+                + "of the subjects in their history. Each topic gets one video on screen, so make every one clearly "
+                + "different from the others, in subject and in mood, and a little unexpected. Avoid "
                 + "anything they dropped, anything in the rejected list and close variants of it, background or "
                 + "ambient filler, and children's content.\n\n"
                 + "For each topic give a short label, one sentence on why it might appeal to this viewer "

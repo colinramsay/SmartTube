@@ -23,6 +23,7 @@ public class RowAssemblerTest {
     @Test
     public void capsItemsPerChannel() {
         RecsConfig config = smallConfig();
+        config.maxPerChannel = 2;
         config.explorationSlots = 0;
         config.maxPerChannelFill = config.maxPerChannel;
 
@@ -46,6 +47,8 @@ public class RowAssemblerTest {
     @Test
     public void fillPassAllowsAThirdItemWhenTheRowIsShort() {
         RecsConfig config = smallConfig();
+        config.maxPerChannel = 2;
+        config.maxPerChannelFill = 3;
         config.explorationSlots = 0;
         config.maxItems = 7;
 
@@ -94,8 +97,25 @@ public class RowAssemblerTest {
     }
 
     @Test
+    public void oneVideoPerChannelEvenUnderDifferentKeysOrInCollabs() {
+        RecsConfig config = smallConfig();
+        config.minItems = 1;
+
+        Candidate byId = new Candidate("v1", "UCtom", "Tom Scott", "One");
+        Candidate byName = new Candidate("v2", null, "Tom Scott", "Two");
+        Candidate collab = new Candidate("v3", null, "Tom Scott and Matt Gray", "Three");
+        Candidate other = new Candidate("v4", null, "Someone Else", "Four");
+
+        List<Candidate> row = RowAssembler.assemble(scored(Arrays.asList(byId, byName, collab, other), 1.0, 0.9, 0.8, 0.1),
+                contextKnowing(config));
+
+        assertEquals(Arrays.asList("v1", "v4"), ids(row));
+    }
+
+    @Test
     public void repeatPenaltyInterleavesChannels() {
         RecsConfig config = smallConfig();
+        config.maxPerChannel = 2;
         config.explorationSlots = 0;
         config.minItems = 1;
 
@@ -150,7 +170,7 @@ public class RowAssemblerTest {
     public void endToEndPipelineProducesDiverseUnwatchedRow() {
         RecsConfig config = new RecsConfig();
         config.newChannelsOnly = false;
-        config.minItems = 5;
+        config.minItems = 3;
 
         List<Seed> seeds = Arrays.asList(seed("s1", "A", 1), seed("s2", "B", 0.9), seed("s3", "A", 0.2));
         ChannelAffinity affinity = ChannelAffinity.compute(seeds, Collections.singletonList("C"), config);
@@ -167,7 +187,7 @@ public class RowAssemblerTest {
         CandidateFilter filter = new CandidateFilter(new java.util.HashSet<>(Arrays.asList("s1", "s2", "s3")), null, config);
         List<Candidate> row = new Recommender(new HeuristicRanker(), config).recommend(seeds, affinity, candidates, filter, NOW);
 
-        assertTrue(row.size() >= 5);
+        assertTrue(row.size() >= 3);
         assertTrue(!ids(row).contains("s2"));
         assertTrue("related video from new channel gets in", ids(row).contains("x1"));
         for (String channel : Arrays.asList("A", "B", "C")) {

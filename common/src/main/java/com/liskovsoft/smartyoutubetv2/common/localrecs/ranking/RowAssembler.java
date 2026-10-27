@@ -66,15 +66,13 @@ public class RowAssembler {
                 break;
             }
 
-            String channel = item.candidate.channelKey();
-
-            if (context.isKnownChannel(item.candidate) || perChannel.containsKey(channel)) {
+            if (context.isKnownChannel(item.candidate) || channelCount(perChannel, item.candidate) > 0) {
                 continue;
             }
 
             result.add(item.candidate);
             picked.add(item.candidate.videoId);
-            perChannel.put(channel, 1);
+            markChannel(perChannel, item.candidate);
         }
 
         return result;
@@ -96,7 +94,7 @@ public class RowAssembler {
                     continue;
                 }
 
-                int count = count(perChannel, item.candidate.channelKey());
+                int count = channelCount(perChannel, item.candidate);
 
                 if (count >= maxPerChannel || (item.candidate.hopParentId != null
                         && count(perChannel, hopKey(item.candidate)) >= config.maxPerHopParent)) {
@@ -117,8 +115,7 @@ public class RowAssembler {
 
             result.add(best.candidate);
             picked.add(best.candidate.videoId);
-            String channel = best.candidate.channelKey();
-            perChannel.put(channel, count(perChannel, channel) + 1);
+            markChannel(perChannel, best.candidate);
             String hop = hopKey(best.candidate);
             perChannel.put(hop, count(perChannel, hop) + 1);
         }
@@ -131,6 +128,24 @@ public class RowAssembler {
      */
     private static String hopKey(Candidate candidate) {
         return "hop:" + candidate.hopParentId;
+    }
+
+    /**
+     * Items already picked from this channel, under whichever of its keys has the most.
+     */
+    private static int channelCount(Map<String, Integer> perChannel, Candidate candidate) {
+        int max = 0;
+        for (String key : candidate.channelKeys()) {
+            max = Math.max(max, count(perChannel, key));
+        }
+        return max;
+    }
+
+    private static void markChannel(Map<String, Integer> perChannel, Candidate candidate) {
+        int next = channelCount(perChannel, candidate) + 1;
+        for (String key : candidate.channelKeys()) {
+            perChannel.put(key, next);
+        }
     }
 
     private static int count(Map<String, Integer> perChannel, String channel) {

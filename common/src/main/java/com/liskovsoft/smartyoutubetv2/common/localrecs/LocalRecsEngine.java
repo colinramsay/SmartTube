@@ -18,8 +18,6 @@ import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.smartyoutubetv2.common.R;
 import com.liskovsoft.smartyoutubetv2.common.app.models.data.Video;
 import com.liskovsoft.smartyoutubetv2.common.app.models.playback.service.VideoStateService;
-import com.liskovsoft.smartyoutubetv2.common.app.presenters.BrowsePresenter;
-import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ai.JevClient;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ai.LeapGenerator;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.cache.CachePolicy;
@@ -75,10 +73,13 @@ public class LocalRecsEngine {
     private static final String TAG = LocalRecsEngine.class.getSimpleName();
     private static final long CALL_TIMEOUT_MS = 10_000;
     private static final long REFRESH_TIMEOUT_MS = 180_000;
-    private static final long FIRST_RUN_WAIT_MS = 6_000;
+    /** How long Home waits for the quick first pass when nothing is saved yet. */
+    private static final long QUICK_PASS_WAIT_MS = 7_000;
+    private static final int QUICK_PASS_CALLS = 8;
+    private static final int QUICK_PASS_SEEDS = 6;
     /** Don't hammer YouTube when refreshes keep producing nothing (e.g. empty history). */
     private static final long MIN_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
-    private static final int MAX_CALLS_PER_REFRESH = 30;
+    private static final int MAX_CALLS_PER_REFRESH = 45;
     /** RSS feeds for a batch are fetched in parallel by the service, so this bounds concurrency too. */
     private static final int RSS_BATCH_SIZE = 4;
     private static final int METADATA_CONCURRENCY = 3;
@@ -87,32 +88,35 @@ public class LocalRecsEngine {
     private static final String YOUTUBE_MOVIES_CHANNEL_ID = "UCuVPpxrm2VAgpH3Ktln4HXg";
     /** Jev judges the best this many main-row candidates; the rest are dropped when it's on. */
     private static final int JEV_MAIN_LIMIT = 150;
-    private static final int LEFT_FIELD_MAX = 24;
+    private static final int LEFT_FIELD_MAX = 20;
     /** Below this the Left Field row is hidden (and the browse screen won't try to "continue" it). */
     private static final int LEFT_FIELD_MIN = 6;
-    private static final int LEFT_FIELD_PER_LEAP = 3;
-    private static final int LEAPS_SEARCHED = 8;
-    private static final int SEARCH_RESULTS_PER_LEAP = 12;
+    private static final int LEFT_FIELD_PER_LEAP = 1;
+    private static final int LEAPS_SEARCHED = 20;
+    private static final int SEARCH_RESULTS_PER_LEAP = 6;
     private static final long LEAPS_TTL_MS = 24 * 60 * 60 * 1000L;
     /** Don't ask Claude again sooner than this after a failed or recent attempt. */
     private static final long LEAP_RETRY_MS = 6 * 60 * 60 * 1000L;
     /** Shown in this many refreshes without being played: treated as a pass and dropped. */
     private static final int IGNORED_AFTER_SHOWS = 4;
     private static final int EXAMPLES = 15;
+    private static final long DISPLAY_RECORD_INTERVAL_MS = 2 * 60 * 60 * 1000L;
     @SuppressLint("StaticFieldLeak")
     private static LocalRecsEngine sInstance;
     private final java.util.concurrent.atomic.AtomicBoolean mGeneratingLeaps = new java.util.concurrent.atomic.AtomicBoolean();
     private long mLastLeapAttemptMs;
     private boolean mForceNewLeaps;
     private boolean mRefreshPending;
-    /** How many local rows Home is showing. A refresh that produces more reloads Home to show them. */
-    private volatile int mRowsOnScreen = -1;
     private final Context mContext;
     private final LocalRecsData mData;
     private final RecsConfig mConfig = new RecsConfig();
     private final Ranker mRanker = new HeuristicRanker();
     private Observable<List<MediaGroup>> mRefresh;
     private long mLastRefreshStartMs;
+    /** How the last quick first pass went, for the diagnostics. */
+    private volatile String mQuickPassNote = "not run";
+    private volatile String mQuickPassRunNote = "";
+    private long mLastDisplayRecordMs;
 
     private LocalRecsEngine(Context context) {
         mContext = context.getApplicationContext();
@@ -254,7 +258,7 @@ public class LocalRecsEngine {
 
         if (policy.isUsable(cached, owner)) {
             List<MediaGroup> rows = fromCache(cached);
-            mRowsOnScreen = rows.size();
+            recordDisplayed(rows);
 
             // Also refresh when removals or newly watched videos have left too few items to show
             if (rows.isEmpty() || policy.needsRefresh(cached, owner, System.currentTimeMillis())) {
@@ -264,14 +268,26 @@ public class LocalRecsEngine {
             return rows;
         }
 
-        // First run: give the refresh a short head start, then let Home carry on regardless.
-        // The refresh keeps going in the background, and Home is reloaded when it lands.
-        List<MediaGroup> result = startRefresh()
-                .timeout(FIRST_RUN_WAIT_MS, TimeUnit.MILLISECONDS)
-                .onErrorReturnItem(Collections.emptyList())
-                .blockingFirst(Collections.emptyList());
+        // Nothing saved yet (first launch, or a new account or mode). Rows never pop in after Home has
+        // loaded, so run a quick pass now and let our row arrive together with YouTube's. If even that
+        // is too slow, Home carries on without it. The full refresh follows in the background for next time.
+        long quickStartMs = System.currentTimeMillis();
+        mQuickPassRunNote = "still running";
+        // Runs to the end even if Home stops waiting; the full refresh starts once it's done
+        Observable<List<MediaGroup>> quickPass = Observable.fromCallable(() -> computeAndStore(true))
+                .subscribeOn(Schedulers.io())
+                .onErrorReturnItem(Collections.<MediaGroup>emptyList())
+                .doFinally(this::refreshNow)
+                .cache();
+        quickPass.subscribe(rows -> {}, error -> {});
 
-        mRowsOnScreen = result.size();
+        List<MediaGroup> result = quickPass
+                .timeout(QUICK_PASS_WAIT_MS, TimeUnit.MILLISECONDS)
+                .onErrorReturnItem(Collections.<MediaGroup>emptyList())
+                .blockingFirst(Collections.<MediaGroup>emptyList());
+        mQuickPassNote = (result.isEmpty() ? "no row for Home" : result.get(0).getMediaItems().size() + " videos shown with Home")
+                + " after " + (System.currentTimeMillis() - quickStartMs) + " ms";
+
         return result;
     }
 
@@ -288,7 +304,7 @@ public class LocalRecsEngine {
 
         mLastRefreshStartMs = now;
 
-        Observable<List<MediaGroup>> refresh = Observable.fromCallable(this::computeAndStore)
+        Observable<List<MediaGroup>> refresh = Observable.fromCallable(() -> computeAndStore(false))
                 .subscribeOn(Schedulers.io())
                 .timeout(REFRESH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .doOnError(error -> Log.e(TAG, "Refresh failed: %s", error))
@@ -324,13 +340,20 @@ public class LocalRecsEngine {
         }
     }
 
-    private List<MediaGroup> computeAndStore() {
+    /**
+     * Builds the rows and saves them. They're shown the next time Home loads, never swapped in while
+     * you're looking at it.
+     */
+    private List<MediaGroup> computeAndStore(boolean quick) {
         long startMs = System.currentTimeMillis();
         String owner = getOwner();
-        Rows result = compute();
+        Rows result = compute(quick);
 
         if (result.main.isEmpty()) {
             Log.d(TAG, "Nothing to recommend yet");
+            if (quick) {
+                mQuickPassRunNote = "finished in " + (System.currentTimeMillis() - startMs) + " ms with too few videos";
+            }
             return Collections.emptyList();
         }
 
@@ -341,43 +364,58 @@ public class LocalRecsEngine {
         List<MediaGroup> rows = new ArrayList<>();
         rows.add(new LocalRecsMediaGroup(mContext.getString(R.string.localrecs_title), main));
 
+        // A thin Left Field result keeps the previous row rather than making it disappear
         if (result.leftField.size() >= LEFT_FIELD_MIN) {
             mData.setLeftFieldCache(new CachedRow(now, owner, toCacheItems(result.leftField)).encode());
             rows.add(new LocalRecsMediaGroup(mContext.getString(R.string.localrecs_left_field_title), toItems(result.leftField)));
-        } else if (result.leftFieldRan) {
-            // Too few good surprises this time: hide the row rather than show a stale one
-            mData.setLeftFieldCache("");
         }
 
-        Log.d(TAG, "Refreshed %s + %s items in %s ms", main.size(), result.leftField.size(), System.currentTimeMillis() - startMs);
-        showIfMore(rows.size());
+        Log.d(TAG, "Refreshed %s + %s items in %s ms%s", main.size(), result.leftField.size(), System.currentTimeMillis() - startMs, quick ? " (quick pass)" : "");
+        if (quick) {
+            mQuickPassRunNote = "finished in " + (System.currentTimeMillis() - startMs) + " ms with " + main.size() + " videos";
+        }
 
         return rows;
     }
 
     /**
-     * If Home is showing fewer local rows than we now have (first run, or the first Left Field ideas
-     * just arrived), reload it so they appear now rather than on the next visit. Only then, since a
-     * reload also re-fetches YouTube's rows.
+     * Count the videos Home is showing as seen, at most once every couple of hours, so a video you
+     * keep scrolling past eventually makes way. Refreshes don't count, only what reaches the screen.
      */
-    private void showIfMore(int rowCount) {
-        if (mRowsOnScreen < 0 || rowCount <= mRowsOnScreen) {
+    private synchronized void recordDisplayed(List<MediaGroup> rows) {
+        long now = System.currentTimeMillis();
+        if (rows.isEmpty() || now - mLastDisplayRecordMs < DISPLAY_RECORD_INTERVAL_MS) {
             return;
         }
+        mLastDisplayRecordMs = now;
 
-        mRowsOnScreen = rowCount;
-        Utils.post(() -> {
-            BrowsePresenter presenter = BrowsePresenter.instance(mContext);
-            if (presenter.isHomeSection()) {
-                presenter.refresh(false);
+        Outcomes outcomes = Outcomes.decode(mData.getOutcomes());
+        for (MediaGroup group : rows) {
+            for (MediaItem item : nonNull(group.getMediaItems())) {
+                String leapId = null;
+                if (item instanceof CachedMediaItem) {
+                    String links = ((CachedMediaItem) item).getCacheItem().seedIds;
+                    for (String link : links != null ? links.split(",") : new String[0]) {
+                        if (link.startsWith(Feedback.LEAP_PREFIX)) {
+                            leapId = link.substring(Feedback.LEAP_PREFIX.length());
+                        }
+                    }
+                }
+                outcomes.recordShown(item.getVideoId(), item.getTitle(), channelName(item), leapId);
             }
-        });
+        }
+        mData.setOutcomes(outcomes.encode());
+    }
+
+    private synchronized void savePlayback(Map<String, Double> playback) {
+        Outcomes outcomes = Outcomes.decode(mData.getOutcomes());
+        outcomes.recordPlayback(playback);
+        mData.setOutcomes(outcomes.encode());
     }
 
     private static class Rows {
         List<Candidate> main = Collections.emptyList();
         List<Candidate> leftField = Collections.emptyList();
-        boolean leftFieldRan;
     }
 
     private static List<MediaItem> toItems(List<Candidate> candidates) {
@@ -402,10 +440,14 @@ public class LocalRecsEngine {
         return items;
     }
 
-    private Rows compute() {
+    /**
+     * @param quick a fast first pass for when nothing is saved yet: history, subscriptions and related
+     *              videos for a few watches only. No second hop, uploads, models or Left Field.
+     */
+    private Rows compute(boolean quick) {
         ContentService contentService = YouTubeServiceManager.instance().getContentService();
         MediaItemService itemService = YouTubeServiceManager.instance().getMediaItemService();
-        AtomicInteger budget = new AtomicInteger(MAX_CALLS_PER_REFRESH);
+        AtomicInteger budget = new AtomicInteger(quick ? QUICK_PASS_CALLS : MAX_CALLS_PER_REFRESH);
         VideoStateService stateService = VideoStateService.instance(mContext);
         ChannelResolver resolver = new ChannelResolver();
         mConfig.newChannelsOnly = mData.isNewChannelsOnly();
@@ -416,10 +458,10 @@ public class LocalRecsEngine {
         MediaGroup historyPage = call(budget, contentService::getHistory);
         List<MediaItem> historyItems = videosOf(historyPage);
         // A second page widens the set of channels we treat as already watched
-        MediaGroup historyPage2 = historyPage != null ? call(budget, () -> contentService.continueGroup(historyPage)) : null;
+        MediaGroup historyPage2 = historyPage != null && !quick ? call(budget, () -> contentService.continueGroup(historyPage)) : null;
         List<MediaItem> olderHistoryItems = videosOf(historyPage2);
         MediaGroup subscriptions = call(budget, contentService::getSubscribedChannelsByLastViewed);
-        List<MediaGroup> home = call(budget, contentService::getHome);
+        List<MediaGroup> home = quick ? null : call(budget, contentService::getHome);
 
         if (historyItems.isEmpty()) {
             return new Rows();
@@ -443,7 +485,7 @@ public class LocalRecsEngine {
             seed.feedbackFactor = feedback.seedMultiplier(seed.videoId);
             rawSeeds.add(seed);
         }
-        List<Pair<Seed, MediaItemMetadata>> related = fetchRelated(itemService, strongestSeeds(rawSeeds), budget);
+        List<Pair<Seed, MediaItemMetadata>> related = fetchRelated(itemService, strongestSeeds(rawSeeds, quick ? QUICK_PASS_SEEDS : mConfig.relatedSeeds), budget);
 
         learnChannels(resolver, historyItems, olderHistoryItems, subscriptions, home, related);
 
@@ -512,13 +554,16 @@ public class LocalRecsEngine {
         skipForDiscovery.addAll(removedChannels);
         ChannelAffinity discovery = ChannelDiscovery.compute(seeds, candidates, skipForDiscovery, mConfig);
 
-        expandSecondHop(itemService, discovery, candidates, resolver, budget);
-        discovery = ChannelDiscovery.compute(seeds, candidates, skipForDiscovery, mConfig);
+        if (!quick) {
+            expandSecondHop(itemService, discovery, candidates, resolver, budget);
+            discovery = ChannelDiscovery.compute(seeds, candidates, skipForDiscovery, mConfig);
 
-        // Latest uploads from the best new channels, plus from favourite channels when those are allowed
-        addRssCandidates(contentService, discoveredChannelIds(discovery, resolver), candidates, budget, resolver);
+            // Latest uploads from the best new channels
+            addRssCandidates(contentService, discoveredChannelIds(discovery, resolver), candidates, budget, resolver);
+        }
 
-        if (!mConfig.newChannelsOnly) {
+        // Plus from favourite channels when those are allowed
+        if (!quick && !mConfig.newChannelsOnly) {
             addRssCandidates(contentService, affinity.topChannelIds(mConfig.rssChannels), candidates, budget, resolver);
         }
 
@@ -540,12 +585,12 @@ public class LocalRecsEngine {
         List<ScoredCandidate> scored = mRanker.score(context, filter.apply(candidates));
 
         // Model step 1: Jev reads the best candidates against examples of what you finish and drop
-        JevClient jev = mData.isJevEnabled() ? new JevClient(mData.getTypeSafeApiKey()) : null;
+        JevClient jev = mData.isJevEnabled() && !quick ? new JevClient(mData.getTypeSafeApiKey()) : null;
         JevClient.Viewer viewer = viewerExamples(seeds, feedback, outcomes);
         Map<String, Judgment> judgments = Collections.emptyMap();
 
         if (jev != null) {
-            List<ScoredCandidate> top = best(scored, JEV_MAIN_LIMIT);
+            List<ScoredCandidate> top = bestPerChannel(scored, JEV_MAIN_LIMIT);
             judgments = jev.judgeForMainRow(candidatesOf(top), viewer);
             // Only trust the judged set when most calls worked; otherwise rank as before
             if (judgments.size() >= top.size() / 2) {
@@ -561,25 +606,26 @@ public class LocalRecsEngine {
         Set<String> leftFieldExcluded = new HashSet<>(excludedIds);
         for (Candidate candidate : rows.main) {
             leftFieldExcluded.add(candidate.videoId);
+            // A channel already in the main row doesn't get a second slot in Left Field
+            ChannelAffinity.addKeys(leftFieldSkipChannels, candidate.channelId, candidate.channelName);
         }
 
         Leap.Batch leaps = null;
-        if (mData.isLeftFieldEnabled()) {
+        if (mData.isLeftFieldEnabled() && !quick) {
             leaps = activeLeaps(feedback, outcomes);
             if (leaps != null) {
                 rows.leftField = buildLeftField(contentService, jev, viewer, leaps, leftFieldExcluded, leftFieldSkipChannels, resolver);
-                rows.leftFieldRan = true;
             }
             maybeGenerateLeaps(seeds, feedback, outcomes, subscriptions, leaps);
         }
 
-        for (Candidate candidate : rows.main) {
-            outcomes.recordShown(candidate.videoId, candidate.title, candidate.channelName, null);
+        if (quick) {
+            // The full refresh straight after records what it shows; counting both would look like ignored repeats
+            return rows;
         }
-        for (Candidate candidate : rows.leftField) {
-            outcomes.recordShown(candidate.videoId, candidate.title, candidate.channelName, candidate.leapId);
-        }
-        mData.setOutcomes(outcomes.encode());
+
+        // Shows are recorded when Home displays the rows (see recordDisplayed), not here
+        savePlayback(playbackOf(stateService, allHistory));
 
         Log.d(TAG, "Seeds %s, known channel keys %s, new channels %s, candidates %s, picked %s + %s",
                 seeds.size(), knownChannels.size(), discovery.keys().size(), candidates.size(), rows.main.size(), rows.leftField.size());
@@ -668,14 +714,11 @@ public class LocalRecsEngine {
         AtomicInteger budget = new AtomicInteger(LEAPS_SEARCHED);
         List<Candidate> found = new ArrayList<>();
         Map<String, Leap> leapByVideoId = new java.util.HashMap<>();
+        Map<String, List<MediaGroup>> results = searchAll(contentService, leaps.leaps, budget);
 
         for (Leap leap : leaps.leaps) {
-            if (budget.get() <= 0) {
-                break;
-            }
-
             int added = 0;
-            for (MediaGroup group : nonNull(call(budget, () -> contentService.getSearch(leap.query)))) {
+            for (MediaGroup group : nonNull(results.get(leap.id))) {
                 for (MediaItem item : videosOf(group)) {
                     // Shorts in search results often aren't flagged, but they come without a length
                     if (added >= SEARCH_RESULTS_PER_LEAP || leapByVideoId.containsKey(item.getVideoId()) || item.getDurationMs() <= 0) {
@@ -705,13 +748,39 @@ public class LocalRecsEngine {
     }
 
     /**
+     * One YouTube search per idea, three at a time. Results by idea id; failed searches are missing.
+     */
+    private Map<String, List<MediaGroup>> searchAll(ContentService contentService, List<Leap> leaps, AtomicInteger budget) {
+        Map<String, List<MediaGroup>> results = new java.util.concurrent.ConcurrentHashMap<>();
+
+        try {
+            Observable.fromIterable(leaps)
+                    .flatMap(leap -> Observable.fromCallable(() -> {
+                                List<MediaGroup> groups = call(budget, () -> contentService.getSearch(leap.query));
+                                if (groups != null) {
+                                    results.put(leap.id, groups);
+                                }
+                                return leap.id;
+                            })
+                            .subscribeOn(Schedulers.io()),
+                            METADATA_CONCURRENCY)
+                    .toList()
+                    .blockingGet();
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Searches failed: %s", e);
+        }
+
+        return results;
+    }
+
+    /**
      * Ask Claude for new ideas in the background when they're a day old, mostly used up, or the user
      * asked. When they arrive, refresh so the row appears straight away.
      */
     private void maybeGenerateLeaps(List<Seed> seeds, Feedback feedback, Outcomes outcomes, MediaGroup subscriptions, Leap.Batch active) {
         long now = System.currentTimeMillis();
         Leap.Batch stored = Leap.Batch.decode(mData.getLeaps());
-        boolean stale = stored == null || now - stored.createdAtMs >= LEAPS_TTL_MS || active == null || active.leaps.size() < 3;
+        boolean stale = stored == null || now - stored.createdAtMs >= LEAPS_TTL_MS || active == null || active.leaps.size() < LeapGenerator.IDEAS / 2;
 
         if (!(mForceNewLeaps || stale) || now - mLastLeapAttemptMs < LEAP_RETRY_MS || !mGeneratingLeaps.compareAndSet(false, true)) {
             return;
@@ -781,6 +850,29 @@ public class LocalRecsEngine {
                 if (state != null && state.video != null && state.video.videoId != null && state.durationMs > 0) {
                     result.put(state.video.videoId, Math.min(1.0, (double) state.positionMs / state.durationMs));
                 }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * The best video from each channel, up to the limit. The row only takes one per channel, so
+     * judging several from the same channel would waste the limit.
+     */
+    private static List<ScoredCandidate> bestPerChannel(List<ScoredCandidate> scored, int limit) {
+        List<ScoredCandidate> result = new ArrayList<>();
+        Set<String> channels = new HashSet<>();
+
+        for (ScoredCandidate item : best(scored, Integer.MAX_VALUE)) {
+            if (result.size() >= limit) {
+                break;
+            }
+
+            Set<String> keys = item.candidate.channelKeys();
+            if (Collections.disjoint(channels, keys)) {
+                channels.addAll(keys);
+                result.add(item);
             }
         }
 
@@ -857,6 +949,7 @@ public class LocalRecsEngine {
             StringBuilder sb = new StringBuilder();
             sb.append("Refreshed ").append(new java.util.Date()).append(", mode ")
                     .append(mConfig.newChannelsOnly ? "new channels only" : "mixed").append('\n');
+            sb.append("Quick first pass: ").append(mQuickPassNote).append("; ").append(mQuickPassRunNote).append('\n');
 
             sb.append("\nSeeds (").append(seeds.size()).append("):\n");
             for (Seed seed : seeds) {
@@ -1017,7 +1110,7 @@ public class LocalRecsEngine {
         }
     }
 
-    private List<Seed> strongestSeeds(List<Seed> seeds) {
+    private List<Seed> strongestSeeds(List<Seed> seeds, int limit) {
         // Videos abandoned early say little about taste, so they don't lead to related videos
         List<Integer> order = new ArrayList<>();
         for (int i = 0; i < seeds.size(); i++) {
@@ -1038,7 +1131,7 @@ public class LocalRecsEngine {
                 seeds.get(a).weightAt(a, mConfig)));
 
         List<Seed> result = new ArrayList<>();
-        for (int i = 0; i < Math.min(mConfig.relatedSeeds, order.size()); i++) {
+        for (int i = 0; i < Math.min(limit, order.size()); i++) {
             result.add(seeds.get(order.get(i)));
         }
 

@@ -111,20 +111,21 @@ public class Leap {
     }
 
     /**
-     * An idea has failed when you removed more of its videos than you finished, after at least two
-     * verdicts. Failed ideas are dropped and reported back so the model doesn't repeat them.
+     * An idea has failed when you removed more of its videos than you finished. Each idea shows a
+     * single video, so one removal with nothing finished is enough. Failed ideas are dropped and
+     * reported back so the model doesn't repeat them.
      */
     public static boolean hasFailed(String leapId, Map<String, Integer> hits, Map<String, Integer> misses) {
         int hit = count(hits, leapId);
         int miss = count(misses, leapId);
-        return miss >= 2 && miss > hit;
+        return miss >= 1 && miss > hit;
     }
 
     /**
-     * An idea has landed when you finished at least two of its videos.
+     * An idea has landed when you finished one of its videos.
      */
     public static boolean hasLanded(String leapId, Map<String, Integer> hits) {
-        return count(hits, leapId) >= 2;
+        return count(hits, leapId) >= 1;
     }
 
     private static int count(Map<String, Integer> counts, String key) {

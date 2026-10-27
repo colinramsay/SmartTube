@@ -48,6 +48,19 @@ public class Candidate {
     }
 
     /**
+     * Every key this channel could go by: its id, its name, and for collabs ("A and B") each
+     * channel in the name. Used so one channel can't take several slots under different keys.
+     */
+    public java.util.Set<String> channelKeys() {
+        java.util.Set<String> keys = new java.util.LinkedHashSet<>();
+        ChannelAffinity.addKeys(keys, channelId, channelName);
+        if (keys.isEmpty()) {
+            keys.add(channelKey());
+        }
+        return keys;
+    }
+
+    /**
      * Fold another sighting of the same video into this one.
      */
     /**

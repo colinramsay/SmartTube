@@ -40,12 +40,13 @@ public class LeftFieldAssembler {
         Map<String, Integer> taken = new HashMap<>();
         boolean added = true;
 
-        // Round robin: each idea gets its next-best video per pass
+        // Round robin: each idea gets its next-best video per pass, and each pass is ordered best first
         while (added && row.size() < maxItems) {
             added = false;
+            List<ScoredCandidate> pass = new ArrayList<>();
 
             for (Map.Entry<String, List<ScoredCandidate>> entry : byLeap.entrySet()) {
-                if (row.size() >= maxItems) {
+                if (row.size() + pass.size() >= maxItems) {
                     break;
                 }
 
@@ -56,17 +57,22 @@ public class LeftFieldAssembler {
 
                 for (ScoredCandidate item : entry.getValue()) {
                     Candidate candidate = item.candidate;
-                    if (videos.contains(candidate.videoId) || channels.contains(candidate.channelKey())) {
+                    if (videos.contains(candidate.videoId) || !Collections.disjoint(channels, candidate.channelKeys())) {
                         continue;
                     }
 
-                    row.add(candidate);
+                    pass.add(item);
                     videos.add(candidate.videoId);
-                    channels.add(candidate.channelKey());
+                    channels.addAll(candidate.channelKeys());
                     taken.put(entry.getKey(), count == null ? 1 : count + 1);
                     added = true;
                     break;
                 }
+            }
+
+            Collections.sort(pass, (a, b) -> Double.compare(b.score, a.score));
+            for (ScoredCandidate item : pass) {
+                row.add(item.candidate);
             }
         }
 
