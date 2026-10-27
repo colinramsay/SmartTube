@@ -71,3 +71,12 @@ tmp/
 fabric.properties
 *BAK.java
 hs_err_pid*.log
+
+# LOCALRECS: fork-only ignores (dev shell, signing secrets)
+.devenv*
+.direnv
+.android/
+devenv.local.nix
+keystore.properties
+*.jks
+*.keystore
