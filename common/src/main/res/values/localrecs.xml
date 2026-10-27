@@ -5,6 +5,7 @@
 
     <string name="localrecs_title" translatable="false">For You (Local)</string>
     <string name="localrecs_enable" translatable="false">Show the For You (Local) row on Home</string>
+    <string name="localrecs_new_channels_only" translatable="false">Only suggest channels I haven\'t watched</string>
     <string name="localrecs_refresh_interval" translatable="false">Refresh interval</string>
     <string name="localrecs_blocked_keywords" translatable="false">Hide titles containing</string>
     <string name="localrecs_blocked_keywords_hint" translatable="false">Comma separated words, e.g. reaction, spoiler</string>

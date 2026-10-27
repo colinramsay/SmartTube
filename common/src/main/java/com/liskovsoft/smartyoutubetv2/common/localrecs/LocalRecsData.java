@@ -11,6 +11,7 @@ import com.liskovsoft.smartyoutubetv2.common.prefs.AppPrefs;
  */
 public class LocalRecsData {
     private static final String KEY_ENABLED = "localrecs_enabled";
+    private static final String KEY_NEW_CHANNELS_ONLY = "localrecs_new_channels_only";
     private static final String KEY_TTL_MS = "localrecs_ttl_ms";
     private static final String KEY_KEYWORDS = "localrecs_blocked_keywords";
     private static final String KEY_CACHE = "localrecs_cache";
@@ -36,6 +37,17 @@ public class LocalRecsData {
 
     public void setEnabled(boolean enabled) {
         mPrefs.putBoolean(KEY_ENABLED, enabled);
+    }
+
+    /**
+     * Only recommend channels the user has never watched or subscribed to.
+     */
+    public boolean isNewChannelsOnly() {
+        return mPrefs.getBoolean(KEY_NEW_CHANNELS_ONLY, true);
+    }
+
+    public void setNewChannelsOnly(boolean newChannelsOnly) {
+        mPrefs.putBoolean(KEY_NEW_CHANNELS_ONLY, newChannelsOnly);
     }
 
     public long getTtlMs() {

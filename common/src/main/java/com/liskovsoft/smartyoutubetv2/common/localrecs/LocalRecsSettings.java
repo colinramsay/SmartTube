@@ -34,9 +34,13 @@ public class LocalRecsSettings {
         LocalRecsEngine engine = LocalRecsEngine.instance(context);
         AppDialogPresenter dialog = AppDialogPresenter.instance(context);
         boolean wasEnabled = data.isEnabled();
+        boolean wasNewChannelsOnly = data.isNewChannelsOnly();
 
         dialog.appendSingleSwitch(UiOptionItem.from(context.getString(R.string.localrecs_enable),
                 option -> data.setEnabled(option.isSelected()), data.isEnabled()));
+
+        dialog.appendSingleSwitch(UiOptionItem.from(context.getString(R.string.localrecs_new_channels_only),
+                option -> data.setNewChannelsOnly(option.isSelected()), data.isNewChannelsOnly()));
 
         List<OptionItem> ttlOptions = new ArrayList<>();
         for (long ttlMs : TTL_OPTIONS_MS) {
@@ -65,7 +69,8 @@ public class LocalRecsSettings {
         dialog.showDialog(context.getString(R.string.localrecs_title), () -> {
             // Show or hide the row straight away if the user is looking at Home
             BrowsePresenter browsePresenter = BrowsePresenter.instance(context);
-            if (wasEnabled != data.isEnabled() && browsePresenter.isHomeSection()) {
+            boolean changed = wasEnabled != data.isEnabled() || wasNewChannelsOnly != data.isNewChannelsOnly();
+            if (changed && browsePresenter.isHomeSection()) {
                 browsePresenter.refresh(false);
             }
         });

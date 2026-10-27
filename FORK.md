@@ -66,21 +66,26 @@ The script connects with adb, builds the `stlocal` debug APK and installs it wit
 
 The code is in `common/src/main/java/com/liskovsoft/smartyoutubetv2/common/localrecs/`.
 
+The row is built for discovery. By default it only suggests channels you have never watched or subscribed to.
+
 1. Seeds are the last 20 videos in your YouTube history. Recent videos count for more, and so do videos you finished. Completion comes from local playback state when we have it, otherwise from YouTube's progress bar.
-2. Each channel's affinity is the sum of its seed weights. Subscribed channels get a smaller base score on top.
-3. Candidates are the latest uploads (RSS) from the top 8 channels, plus YouTube's related videos for the 4 strongest seeds.
-4. Each candidate gets a score that mixes channel affinity, how many seeds it was related to, and how new it is.
-5. The filter drops watched videos, Shorts, live and upcoming streams, duplicates, channels you've blocked in SmartTube, and titles that contain your blocked words.
-6. Each channel gets at most 2 items, and a channel loses score for every item it already has in the row. Two slots are kept for good candidates from channels you haven't watched.
-7. The row holds up to 30 items. With fewer than 10 it is hidden.
+2. Known channels are every channel in your history, your subscriptions and SmartTube's local playback history.
+3. We fetch YouTube's related videos for the 8 strongest seeds. A new channel scores the sum of the weights of the distinct seeds it turned up next to. So a channel that appears beside five different videos you liked beats one that appears five times beside a single video.
+4. We also fetch the latest uploads (RSS) from the 4 best new channels, so the row isn't limited to what YouTube chose to put in its related lists.
+5. Each candidate gets a score that mixes that channel score, how many seeds it was related to, and how new it is.
+6. The filter drops known channels, watched videos, anything YouTube's own Home is showing right now, Shorts, live and upcoming streams, duplicates, channels you've blocked in SmartTube, and titles that contain your blocked words.
+7. Each channel gets at most 2 items, and a channel loses score for every item it already has in the row.
+8. The row holds up to 30 items. With fewer than 10 it is hidden.
+
+If you turn off "Only suggest channels I haven't watched", the row becomes a mix. Your favourite channels' latest uploads come back (RSS from the top 8 channels by affinity), new channels score slightly lower than known ones, and two slots are kept for the best new-channel picks. Changing the mode throws away the cached row and builds a new one.
 
 The scoring code in `localrecs/ranking` and `localrecs/cache` is plain Java with no Android or network calls, and the unit tests cover it. `Ranker` is the place to plug in a different ranker later. Diversity rules run after it, so a new ranker only has to score relevance.
 
-When Home loads, the cached row shows straight away. If it's older than the refresh interval (2 hours by default), a refresh runs in the background and the new row appears on the next Home load. The one exception is the very first run, when there's no cache yet. Home then waits up to 6 seconds for the first refresh before it carries on without the row. A refresh makes at most 12 service calls, runs 2 related-video lookups at a time, gives each call 10 seconds and the whole refresh 60. Any error is logged and the row is skipped. Home itself never fails because of it.
+When Home loads, the cached row shows straight away. If it's older than the refresh interval (2 hours by default), a refresh runs in the background and the new row appears on the next Home load. The one exception is the very first run, when there's no cache yet. Home then waits up to 6 seconds for the first refresh before it carries on without the row. A refresh makes at most 16 service calls, runs 2 related-video lookups at a time, gives each call 10 seconds and the whole refresh 60. Any error is logged and the row is skipped. Home itself never fails because of it.
 
 Signed-out users get no row, because there's no history to seed it. The row also hides when the device is offline.
 
-Settings live under Settings > General > For You (Local). There you can turn the row on or off, change the refresh interval, add blocked title words, or start a refresh.
+Settings live under Settings > General > For You (Local). There you can turn the row on or off, choose between new channels only and a mix, change the refresh interval, add blocked title words, or start a refresh.
 
 The built-in updater is off in the `stlocal` flavour. It's controlled by the `localrecs_updater_disabled` bool resource, which `smarttubetv/src/stlocal/res/values/strings.xml` sets to true. "Check for updates" just shows a message.
 
@@ -102,7 +107,7 @@ Everything else is new files: `localrecs/`, `common/src/main/res/values/localrec
 2. Sign in and watch a few videos to the end. Open Home. The first time, the row can take a few seconds to appear, or only show up on the next Home load.
 3. Check that "For You (Local)" is the first row and the YouTube rows load below it as usual.
 4. Play a video from the row. Playback, the long-press menu and history should all work.
-5. Finish a video from the row. Go to Settings > General > For You (Local) > Refresh now, then reopen Home. The video you watched should be gone.
+5. Check that none of the channels in the row are ones you have watched or subscribed to, and that the videos are not the ones on YouTube's Home rows below. Then finish a video from the row. Go to Settings > General > For You (Local) > Refresh now, then reopen Home. The video you watched should be gone.
 6. Turn the row off in the same settings dialog. Back on Home, the row should be gone and the rest of Home unchanged. Turn it back on and it should return.
 7. Add a blocked word that matches a title in the row and refresh. That video should drop out.
 8. Turn off Wi-Fi and open Home. The row should not appear, and Home should show its usual offline error.
