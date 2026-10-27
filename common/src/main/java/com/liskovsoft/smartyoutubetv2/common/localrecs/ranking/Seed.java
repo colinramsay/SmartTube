@@ -9,12 +9,21 @@ public class Seed {
     public final String channelName;
     /** 0..1, or a negative value when unknown. */
     public final double completion;
+    /** Lowered when videos this seed led to were removed, see {@link Feedback}. */
+    public double feedbackFactor = 1;
 
     public Seed(String videoId, String channelId, String channelName, double completion) {
         this.videoId = videoId;
         this.channelId = channelId;
         this.channelName = channelName;
         this.completion = completion;
+    }
+
+    /**
+     * This seed's weight at the given history position, including feedback.
+     */
+    public double weightAt(int rank, RecsConfig config) {
+        return weight(rank, completion, config) * feedbackFactor;
     }
 
     /**

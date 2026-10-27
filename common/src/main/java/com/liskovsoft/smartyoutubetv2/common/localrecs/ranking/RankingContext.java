@@ -18,6 +18,8 @@ public class RankingContext {
     public final Set<String> knownChannels;
     public final RecsConfig config;
     public final long nowMs;
+    /** What the user removed from the row before. Empty unless set. */
+    public Feedback feedback;
     private final Map<String, Double> mSeedWeights = new HashMap<>();
 
     /**
@@ -35,10 +37,11 @@ public class RankingContext {
         this.knownChannels = knownChannels;
         this.config = config;
         this.nowMs = nowMs;
+        this.feedback = new Feedback(config);
 
         for (int i = 0; i < seeds.size(); i++) {
             Seed seed = seeds.get(i);
-            mSeedWeights.put(seed.videoId, Seed.weight(i, seed.completion, config));
+            mSeedWeights.put(seed.videoId, seed.weightAt(i, config));
         }
     }
 

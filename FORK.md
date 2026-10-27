@@ -77,6 +77,14 @@ The row is built for discovery. By default it only suggests channels you have ne
 7. Each channel gets at most 2 items, and a channel loses score for every item it already has in the row.
 8. The row holds up to 30 items. With fewer than 10 it is hidden.
 
+### Removing videos
+
+Long-press a video in the row and choose "Remove from For You (Local)". It disappears straight away, and the next refresh learns from it in three ways. The video never comes back. Its channel scores half as much for each removal, and after two removals the channel is dropped entirely. The watched videos that led to it (its seeds) count for 30% less per removal, so fewer videos like it turn up. The last 300 removals are remembered and older ones fade out. Settings > General > For You (Local) > Forget removed videos clears them. Removals stay on the device and are not sent to YouTube.
+
+The menu item is switched on the first time the row loads. Like any other menu item, it can be hidden in Settings > General > Context menu.
+
+Each refresh writes a summary to `files/app_prefs/localrecs_debug` in the app's storage: seeds, subscriptions, known channels, top new channels and why each video made the row. Read it with `adb shell run-as org.smarttube.localrecs cat files/app_prefs/localrecs_debug`.
+
 If you turn off "Only suggest channels I haven't watched", the row becomes a mix. Your favourite channels' latest uploads come back (RSS from the top 8 channels by affinity), new channels score slightly lower than known ones, and two slots are kept for the best new-channel picks. Changing the mode throws away the cached row and builds a new one.
 
 The scoring code in `localrecs/ranking` and `localrecs/cache` is plain Java with no Android or network calls, and the unit tests cover it. `Ranker` is the place to plug in a different ranker later. Diversity rules run after it, so a new ranker only has to score relevance.
@@ -96,6 +104,7 @@ The built-in updater is off in the `stlocal` flavour. It's controlled by the `lo
 | `common/.../presenters/BrowsePresenter.java` | Puts our row in front of the Home feed with `Observable.concat` |
 | `common/.../presenters/settings/GeneralSettingsPresenter.java` | Adds the For You (Local) settings entry |
 | `common/.../presenters/dialogs/AppUpdatePresenter.java` | Stops update checks when the build flag is set |
+| `common/.../dialogs/menu/providers/ContextMenuManager.java` | Registers the "Remove from For You (Local)" menu item |
 | `smarttubetv/build.gradle` | Adds the `stlocal` flavour |
 | `.gitignore` | Ignores devenv state and signing files |
 
@@ -107,9 +116,10 @@ Everything else is new files: `localrecs/`, `common/src/main/res/values/localrec
 2. Sign in and watch a few videos to the end. Open Home. The first time, the row can take a few seconds to appear, or only show up on the next Home load.
 3. Check that "For You (Local)" is the first row and the YouTube rows load below it as usual.
 4. Play a video from the row. Playback, the long-press menu and history should all work.
-5. Check that none of the channels in the row are ones you have watched or subscribed to, and that the videos are not the ones on YouTube's Home rows below. Then finish a video from the row. Go to Settings > General > For You (Local) > Refresh now, then reopen Home. The video you watched should be gone.
-6. Turn the row off in the same settings dialog. Back on Home, the row should be gone and the rest of Home unchanged. Turn it back on and it should return.
-7. Add a blocked word that matches a title in the row and refresh. That video should drop out.
-8. Turn off Wi-Fi and open Home. The row should not appear, and Home should show its usual offline error.
-9. Sign out. The row should not appear.
-10. Go to Settings > About > Check for updates. You should get the "Updates are turned off" message, and no update dialog.
+5. Long-press a video in the row and choose "Remove from For You (Local)". It should vanish at once and not return after Refresh now. Remove two videos from the same channel and that channel should stop appearing.
+6. Check that none of the channels in the row are ones you have watched or subscribed to, and that the videos are not the ones on YouTube's Home rows below. Then finish a video from the row. Go to Settings > General > For You (Local) > Refresh now, then reopen Home. The video you watched should be gone.
+7. Turn the row off in the same settings dialog. Back on Home, the row should be gone and the rest of Home unchanged. Turn it back on and it should return.
+8. Add a blocked word that matches a title in the row and refresh. That video should drop out.
+9. Turn off Wi-Fi and open Home. The row should not appear, and Home should show its usual offline error.
+10. Sign out. The row should not appear.
+11. Go to Settings > About > Check for updates. You should get the "Updates are turned off" message, and no update dialog.

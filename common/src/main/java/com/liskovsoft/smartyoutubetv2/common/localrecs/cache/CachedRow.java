@@ -9,12 +9,12 @@ import java.util.List;
  * Pure Java so it can be unit tested.
  */
 public class CachedRow {
-    // Bump when an old cached row should be thrown away (v4: rows built before the view count and movie filters)
-    private static final String VERSION = "localrecs-v4";
+    // Bump when an old cached row should be thrown away (v5: items carry the seeds that led to them)
+    private static final String VERSION = "localrecs-v5";
     // ASCII unit and record separators never show up in titles, so no escaping is needed once stripped
     private static final char FIELD_SEP = '\u001F';
     private static final char RECORD_SEP = '\u001E';
-    private static final int FIELD_COUNT = 9;
+    private static final int FIELD_COUNT = 10;
 
     public final long savedAtMs;
     /** Who the row was computed for, so a profile switch doesn't show someone else's row. */
@@ -31,6 +31,8 @@ public class CachedRow {
         public String badgeText;
         public long durationMs;
         public long publishedMs;
+        /** Comma separated ids of the watched videos that led to this one, for {@code Feedback}. */
+        public String seedIds;
     }
 
     public CachedRow(long savedAtMs, String owner, List<Item> items) {
@@ -57,7 +59,8 @@ public class CachedRow {
                     .append(clean(item.secondTitle)).append(FIELD_SEP)
                     .append(clean(item.badgeText)).append(FIELD_SEP)
                     .append(item.durationMs).append(FIELD_SEP)
-                    .append(item.publishedMs);
+                    .append(item.publishedMs).append(FIELD_SEP)
+                    .append(clean(item.seedIds));
         }
 
         return sb.toString();
@@ -98,6 +101,7 @@ public class CachedRow {
                 item.badgeText = nullIfEmpty(fields[6]);
                 item.durationMs = Long.parseLong(fields[7]);
                 item.publishedMs = Long.parseLong(fields[8]);
+                item.seedIds = nullIfEmpty(fields[9]);
                 items.add(item);
             }
 

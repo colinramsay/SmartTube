@@ -9,6 +9,10 @@
     <string name="localrecs_refresh_interval" translatable="false">Refresh interval</string>
     <string name="localrecs_blocked_keywords" translatable="false">Hide titles containing</string>
     <string name="localrecs_blocked_keywords_hint" translatable="false">Comma separated words, e.g. reaction, spoiler</string>
+    <string name="localrecs_remove" translatable="false">Remove from For You (Local)</string>
+    <string name="localrecs_removed" translatable="false">Removed. You\'ll see less like this.</string>
+    <string name="localrecs_forget_removals" translatable="false">Forget removed videos (%d)</string>
+    <string name="localrecs_removals_forgotten" translatable="false">Removed videos forgotten. They can come back after the next refresh.</string>
     <string name="localrecs_refresh_now" translatable="false">Refresh now</string>
     <string name="localrecs_refresh_started" translatable="false">Refreshing in the background. The row updates next time Home loads.</string>
     <string name="localrecs_minutes" translatable="false">%d minutes</string>

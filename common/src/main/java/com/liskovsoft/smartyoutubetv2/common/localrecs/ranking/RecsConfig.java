@@ -46,6 +46,16 @@ public class RecsConfig {
     /** Hide videos with fewer views than this, when the view count is known. */
     public long minViewCount = 1000;
 
+    // Feedback from removed videos
+    /** How many recent removals to remember. Older ones drop off. */
+    public int maxRemovals = 300;
+    /** Channel score multiplier per removed video from that channel. */
+    public double channelRemovalPenalty = 0.5;
+    /** Removals from one channel before it is dropped entirely. */
+    public int channelRemovalsToBlock = 2;
+    /** Seed weight multiplier per removed video that seed led to. */
+    public double seedRemovalPenalty = 0.7;
+
     // Diversity
     public int maxPerChannel = 2;
     /** Score multiplier applied once per item already picked from the same channel. */

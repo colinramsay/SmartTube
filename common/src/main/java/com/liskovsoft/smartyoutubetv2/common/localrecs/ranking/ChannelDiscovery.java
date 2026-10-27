@@ -19,7 +19,7 @@ public class ChannelDiscovery {
                                           RecsConfig config) {
         Map<String, Double> seedWeights = new HashMap<>();
         for (int i = 0; i < seeds.size(); i++) {
-            seedWeights.put(seeds.get(i).videoId, Seed.weight(i, seeds.get(i).completion, config));
+            seedWeights.put(seeds.get(i).videoId, seeds.get(i).weightAt(i, config));
         }
 
         ChannelAffinity result = new ChannelAffinity();

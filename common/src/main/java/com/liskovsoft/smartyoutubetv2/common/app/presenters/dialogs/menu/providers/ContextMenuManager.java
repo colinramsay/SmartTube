@@ -19,6 +19,7 @@ public class ContextMenuManager {
         mProviders.add(new ChannelGroupMenuProvider(context, 0));
         mProviders.add(new RemoveGroupMenuProvider(context, 1));
         mProviders.add(new RenameGroupMenuProvider(context, 2));
+        mProviders.add(new com.liskovsoft.smartyoutubetv2.common.localrecs.LocalRecsMenuProvider(context, com.liskovsoft.smartyoutubetv2.common.localrecs.LocalRecsMenuProvider.MENU_INDEX)); // LOCALRECS
     }
 
     public List<ContextMenuProvider> getProviders() {

@@ -16,6 +16,8 @@ public class LocalRecsData {
     private static final String KEY_KEYWORDS = "localrecs_blocked_keywords";
     private static final String KEY_CACHE = "localrecs_cache";
     private static final String KEY_DIAGNOSTICS = "localrecs_debug";
+    private static final String KEY_FEEDBACK = "localrecs_feedback";
+    private static final String KEY_MENU_ITEM_ADDED = "localrecs_menu_item_added";
     @SuppressLint("StaticFieldLeak")
     private static LocalRecsData sInstance;
     private final AppPrefs mPrefs;
@@ -79,6 +81,28 @@ public class LocalRecsData {
 
     public void setCache(String cache) {
         mPrefs.setData(KEY_CACHE, cache);
+    }
+
+    /**
+     * Videos removed from the row, see {@code Feedback}. Kept per device, not per account.
+     */
+    public String getFeedback() {
+        return mPrefs.getData(KEY_FEEDBACK);
+    }
+
+    public void setFeedback(String feedback) {
+        mPrefs.setData(KEY_FEEDBACK, feedback);
+    }
+
+    /**
+     * Whether we already switched on our long-press menu item once. After that it's the user's choice.
+     */
+    public boolean isMenuItemAdded() {
+        return mPrefs.getBoolean(KEY_MENU_ITEM_ADDED, false);
+    }
+
+    public void markMenuItemAdded() {
+        mPrefs.putBoolean(KEY_MENU_ITEM_ADDED, true);
     }
 
     /**

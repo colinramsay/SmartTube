@@ -26,7 +26,7 @@ public class ChannelAffinity {
                 String key = keyOf(seed.channelId, seed.channelName);
 
                 if (key != null) {
-                    affinity.add(key, Seed.weight(i, seed.completion, config));
+                    affinity.add(key, seed.weightAt(i, config));
                 }
             }
         }

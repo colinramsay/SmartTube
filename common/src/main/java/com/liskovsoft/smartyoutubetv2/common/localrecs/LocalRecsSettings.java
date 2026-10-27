@@ -61,6 +61,14 @@ public class LocalRecsSettings {
                             return true;
                         })));
 
+        int removals = engine.getRemovalCount();
+        if (removals > 0) {
+            dialog.appendSingleButton(UiOptionItem.from(context.getString(R.string.localrecs_forget_removals, removals), option -> {
+                engine.forgetRemovals();
+                MessageHelpers.showMessage(context, R.string.localrecs_removals_forgotten);
+            }));
+        }
+
         dialog.appendSingleButton(UiOptionItem.from(context.getString(R.string.localrecs_refresh_now), option -> {
             engine.refreshNow();
             MessageHelpers.showMessage(context, R.string.localrecs_refresh_started);

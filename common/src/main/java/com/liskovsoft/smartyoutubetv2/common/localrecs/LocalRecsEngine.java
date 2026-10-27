@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
+import android.text.TextUtils;
 import android.util.Pair;
 
 import com.liskovsoft.mediaserviceinterfaces.ContentService;
@@ -25,6 +26,7 @@ import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.CandidateFilter;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ChannelAffinity;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ChannelDiscovery;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ChannelResolver;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Feedback;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.HeuristicRanker;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Ranker;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.RankingContext;
@@ -100,6 +102,7 @@ public class LocalRecsEngine {
      */
     public static Observable<List<MediaGroup>> observe(Context context) {
         LocalRecsEngine engine = instance(context);
+        LocalRecsMenuProvider.enableByDefault(context);
 
         return Observable.defer(() -> engine.mData.isEnabled() ? Observable.fromCallable(engine::loadForDisplay) : Observable.<List<MediaGroup>>empty())
                 .subscribeOn(Schedulers.io())
@@ -119,6 +122,55 @@ public class LocalRecsEngine {
         startRefresh();
     }
 
+    /**
+     * The user removed this video from the row. Remember it, and what led to it, for the next refresh.
+     */
+    public synchronized void removeFromRow(Video video) {
+        if (video == null || video.videoId == null) {
+            return;
+        }
+
+        CachedRow cached = CachedRow.decode(mData.getCache());
+        CachedRow.Item cachedItem = null;
+        List<CachedRow.Item> remaining = new ArrayList<>();
+
+        if (cached != null) {
+            for (CachedRow.Item item : cached.items) {
+                if (video.videoId.equals(item.videoId)) {
+                    cachedItem = item;
+                } else {
+                    remaining.add(item);
+                }
+            }
+
+            // Keep the saved row in step with what's on screen
+            mData.setCache(new CachedRow(cached.savedAtMs, cached.owner, remaining).encode());
+        }
+
+        String channelName = video.getAuthor();
+        String channelId = video.channelId != null ? video.channelId : cachedItem != null ? cachedItem.channelId : null;
+        List<String> seedIds = cachedItem != null && cachedItem.seedIds != null ?
+                Arrays.asList(cachedItem.seedIds.split(",")) : Collections.emptyList();
+
+        Feedback feedback = loadFeedback();
+        feedback.addRemoval(new Feedback.Removal(video.videoId, channelId, channelName, seedIds));
+        mData.setFeedback(feedback.encode());
+
+        Log.d(TAG, "Removed %s (%s), %s removals stored", video.videoId, channelName, feedback.size());
+    }
+
+    public int getRemovalCount() {
+        return loadFeedback().size();
+    }
+
+    public void forgetRemovals() {
+        mData.setFeedback("");
+    }
+
+    private Feedback loadFeedback() {
+        return Feedback.decode(mData.getFeedback(), mConfig);
+    }
+
     private List<MediaGroup> loadForDisplay() {
         if (!isSignedIn() || !isOnline()) {
             return Collections.emptyList();
@@ -129,11 +181,14 @@ public class LocalRecsEngine {
         CachedRow cached = CachedRow.decode(mData.getCache());
 
         if (policy.isUsable(cached, owner)) {
-            if (policy.needsRefresh(cached, owner, System.currentTimeMillis())) {
+            List<MediaGroup> rows = fromCache(cached);
+
+            // Also refresh when removals or newly watched videos have left too few items to show
+            if (rows.isEmpty() || policy.needsRefresh(cached, owner, System.currentTimeMillis())) {
                 startRefresh();
             }
 
-            return fromCache(cached);
+            return rows;
         }
 
         // First run: give the refresh a short head start, then let Home carry on regardless.
@@ -181,16 +236,21 @@ public class LocalRecsEngine {
     private List<MediaGroup> computeAndStore() {
         long startMs = System.currentTimeMillis();
         String owner = getOwner();
-        List<MediaItem> row = compute();
+        List<Candidate> ranked = compute();
 
-        if (row.isEmpty()) {
+        if (ranked.isEmpty()) {
             Log.d(TAG, "Nothing to recommend yet");
             return Collections.emptyList();
         }
 
+        List<MediaItem> row = new ArrayList<>();
         List<CachedRow.Item> items = new ArrayList<>();
-        for (MediaItem item : row) {
-            items.add(CachedMediaItem.toCacheItem(item));
+        for (Candidate candidate : ranked) {
+            MediaItem item = (MediaItem) candidate.payload;
+            CachedRow.Item cacheItem = CachedMediaItem.toCacheItem(item);
+            cacheItem.seedIds = TextUtils.join(",", candidate.relatedSeedIds);
+            row.add(item);
+            items.add(cacheItem);
         }
         mData.setCache(new CachedRow(System.currentTimeMillis(), owner, items).encode());
 
@@ -199,13 +259,14 @@ public class LocalRecsEngine {
         return Collections.singletonList(new LocalRecsMediaGroup(mContext.getString(R.string.localrecs_title), row));
     }
 
-    private List<MediaItem> compute() {
+    private List<Candidate> compute() {
         ContentService contentService = YouTubeServiceManager.instance().getContentService();
         MediaItemService itemService = YouTubeServiceManager.instance().getMediaItemService();
         AtomicInteger budget = new AtomicInteger(MAX_CALLS_PER_REFRESH);
         VideoStateService stateService = VideoStateService.instance(mContext);
         ChannelResolver resolver = new ChannelResolver();
         mConfig.newChannelsOnly = mData.isNewChannelsOnly();
+        Feedback feedback = loadFeedback();
 
         // Fetch everything first, so channel ids seen on one item can fill gaps on another (see ChannelResolver)
         MediaGroup historyPage = call(budget, contentService::getHistory);
@@ -226,7 +287,9 @@ public class LocalRecsEngine {
             if (rawSeeds.size() >= mConfig.maxSeeds) {
                 break;
             }
-            rawSeeds.add(new Seed(item.getVideoId(), null, null, completionOf(item, stateService)));
+            Seed seed = new Seed(item.getVideoId(), null, null, completionOf(item, stateService));
+            seed.feedbackFactor = feedback.seedMultiplier(seed.videoId);
+            rawSeeds.add(seed);
         }
         List<Pair<Seed, MediaItemMetadata>> related = fetchRelated(itemService, strongestSeeds(rawSeeds), budget);
 
@@ -244,7 +307,9 @@ public class LocalRecsEngine {
             ChannelAffinity.addKeys(knownChannels, channelId, name);
 
             if (seeds.size() < mConfig.maxSeeds) {
-                seeds.add(new Seed(item.getVideoId(), channelId, name, completionOf(item, stateService)));
+                Seed seed = new Seed(item.getVideoId(), channelId, name, completionOf(item, stateService));
+                seed.feedbackFactor = feedback.seedMultiplier(seed.videoId);
+                seeds.add(seed);
             }
         }
 
@@ -294,7 +359,11 @@ public class LocalRecsEngine {
             }
         }
 
-        ChannelAffinity discovery = ChannelDiscovery.compute(seeds, candidates, knownChannels, mConfig);
+        // Channels the user keeps removing are never "discovered" again
+        Set<String> removedChannels = feedback.blockedChannelKeys();
+        Set<String> skipForDiscovery = new HashSet<>(knownChannels);
+        skipForDiscovery.addAll(removedChannels);
+        ChannelAffinity discovery = ChannelDiscovery.compute(seeds, candidates, skipForDiscovery, mConfig);
 
         // Latest uploads from the best new channels, plus from favourite channels when those are allowed
         addRssCandidates(contentService, discovery.topChannelIds(mConfig.discoveredChannels), candidates, budget, resolver);
@@ -304,24 +373,19 @@ public class LocalRecsEngine {
         }
 
         // 4-7. Filter, score, diversify
-        CandidateFilter filter = new CandidateFilter(excludedIds, createBlocklist(), mConfig);
-        if (mConfig.newChannelsOnly) {
-            filter.excludeChannels(knownChannels);
-        }
+        excludedIds.addAll(feedback.removedVideoIds());
+        CandidateFilter filter = new CandidateFilter(excludedIds, createBlocklist(), mConfig)
+                .excludeChannels(mConfig.newChannelsOnly ? skipForDiscovery : removedChannels);
 
         RankingContext context = new RankingContext(seeds, affinity, discovery, knownChannels, mConfig, System.currentTimeMillis());
+        context.feedback = feedback;
         List<Candidate> ranked = new Recommender(mRanker, mConfig).recommend(context, candidates, filter);
 
         Log.d(TAG, "Seeds %s, known channel keys %s, new channels %s, candidates %s, picked %s",
                 seeds.size(), knownChannels.size(), discovery.keys().size(), candidates.size(), ranked.size());
         writeDiagnostics(seeds, subscribedKeys, knownChannels, discovery, candidates.size(), ranked);
 
-        List<MediaItem> result = new ArrayList<>();
-        for (Candidate candidate : ranked) {
-            result.add((MediaItem) candidate.payload);
-        }
-
-        return result;
+        return ranked;
     }
 
     /**
@@ -351,6 +415,8 @@ public class LocalRecsEngine {
             for (String channel : discovery.topKeys(20)) {
                 sb.append("  ").append(channel).append(String.format(Locale.US, " %.2f", discovery.get(channel))).append('\n');
             }
+
+            sb.append("\nRemoved videos remembered: ").append(loadFeedback().size()).append('\n');
 
             sb.append("\nRow (").append(row.size()).append(" of ").append(candidateCount).append(" candidates):\n");
             for (Candidate candidate : row) {
@@ -424,8 +490,8 @@ public class LocalRecsEngine {
         }
 
         Collections.sort(order, (a, b) -> Double.compare(
-                Seed.weight(b, seeds.get(b).completion, mConfig),
-                Seed.weight(a, seeds.get(a).completion, mConfig)));
+                seeds.get(b).weightAt(b, mConfig),
+                seeds.get(a).weightAt(a, mConfig)));
 
         List<Seed> result = new ArrayList<>();
         for (int i = 0; i < Math.min(mConfig.relatedSeeds, order.size()); i++) {
@@ -492,6 +558,7 @@ public class LocalRecsEngine {
      */
     private List<MediaGroup> fromCache(CachedRow cached) {
         Set<String> watchedIds = localWatchedIds(VideoStateService.instance(mContext));
+        watchedIds.addAll(loadFeedback().removedVideoIds());
         CandidateFilter filter = new CandidateFilter(watchedIds, createBlocklist(), mConfig);
         List<MediaItem> items = new ArrayList<>();
 

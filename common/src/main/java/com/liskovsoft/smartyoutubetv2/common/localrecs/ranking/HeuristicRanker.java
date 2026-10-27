@@ -31,9 +31,10 @@ public class HeuristicRanker implements Ranker {
             double coOccurrence = maxCoOccurrence > 0 ? coOccurrence(context, candidate) / maxCoOccurrence : 0;
             double freshness = freshness(candidate.publishedMs, context.nowMs, config);
 
-            double score = config.affinityWeight * channel
+            double score = (config.affinityWeight * channel
                     + config.coOccurrenceWeight * coOccurrence
-                    + config.freshnessWeight * freshness;
+                    + config.freshnessWeight * freshness)
+                    * context.feedback.channelMultiplier(candidate.channelId, candidate.channelName);
 
             result.add(new ScoredCandidate(candidate, score));
         }

@@ -23,6 +23,7 @@ public class CacheTest {
         item.author = "Author";
         item.durationMs = 1234;
         item.publishedMs = 5678;
+        item.seedIds = "s1,s2";
 
         CachedRow.Item bare = new CachedRow.Item();
         bare.videoId = "def";
@@ -36,6 +37,7 @@ public class CacheTest {
         assertEquals("Title with   odd   chars", decoded.items.get(0).title);
         assertEquals(1234, decoded.items.get(0).durationMs);
         assertEquals(5678, decoded.items.get(0).publishedMs);
+        assertEquals("s1,s2", decoded.items.get(0).seedIds);
         assertNull(decoded.items.get(1).title);
     }
 
@@ -44,7 +46,7 @@ public class CacheTest {
         assertNull(CachedRow.decode(null));
         assertNull(CachedRow.decode(""));
         assertNull(CachedRow.decode("something else"));
-        assertNull(CachedRow.decode("localrecs-v4\u001Fnot-a-number\u001Fme"));
+        assertNull(CachedRow.decode("localrecs-v5\u001Fnot-a-number\u001Fme"));
     }
 
     @Test
