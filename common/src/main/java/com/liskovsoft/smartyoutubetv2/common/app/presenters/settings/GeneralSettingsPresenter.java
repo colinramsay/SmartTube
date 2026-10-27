@@ -19,6 +19,7 @@ import com.liskovsoft.smartyoutubetv2.common.app.presenters.base.BasePresenter;
 import com.liskovsoft.smartyoutubetv2.common.app.presenters.dialogs.menu.providers.ContextMenuManager;
 import com.liskovsoft.smartyoutubetv2.common.app.presenters.dialogs.menu.providers.ContextMenuProvider;
 import com.liskovsoft.smartyoutubetv2.common.app.presenters.service.SidebarService;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.LocalRecsSettings; // LOCALRECS
 import com.liskovsoft.smartyoutubetv2.common.misc.MediaServiceManager;
 import com.liskovsoft.smartyoutubetv2.common.prefs.AppPrefs;
 import com.liskovsoft.smartyoutubetv2.common.prefs.GeneralData;
@@ -76,6 +77,7 @@ public class GeneralSettingsPresenter extends BasePresenter<Void> {
         AppDialogPresenter settingsPresenter = AppDialogPresenter.instance(getContext());
 
         appendBootToSection(settingsPresenter);
+        LocalRecsSettings.append(getContext(), settingsPresenter); // LOCALRECS
         appendEnabledSections(settingsPresenter);
         appendContextMenuItemsCategory(settingsPresenter);
         appendHideContent(settingsPresenter);

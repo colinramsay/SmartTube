@@ -36,6 +36,7 @@ import com.liskovsoft.smartyoutubetv2.common.app.presenters.dialogs.menu.provide
 import com.liskovsoft.smartyoutubetv2.common.app.presenters.interfaces.SectionPresenter;
 import com.liskovsoft.smartyoutubetv2.common.app.presenters.interfaces.VideoGroupPresenter;
 import com.liskovsoft.smartyoutubetv2.common.app.views.BrowseView;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.LocalRecsEngine; // LOCALRECS
 import com.liskovsoft.smartyoutubetv2.common.misc.AppDataSourceManager;
 import com.liskovsoft.smartyoutubetv2.common.misc.BrowseProcessorManager;
 import com.liskovsoft.smartyoutubetv2.common.misc.MediaServiceManager;
@@ -213,7 +214,8 @@ public class BrowsePresenter extends BasePresenter<BrowseView> implements Sectio
     }
 
     private void initRowAndGridMapping() {
-        mRowMapping.put(MediaGroup.TYPE_HOME, getContentService().getHomeObserve());
+        // LOCALRECS: our row goes first. It never errors, and only waits on the network the very first time.
+        mRowMapping.put(MediaGroup.TYPE_HOME, Observable.concat(LocalRecsEngine.observe(getContext()), getContentService().getHomeObserve()));
         mRowMapping.put(MediaGroup.TYPE_TRENDING, getContentService().getTrendingObserve());
         mRowMapping.put(MediaGroup.TYPE_KIDS_HOME, getContentService().getKidsHomeObserve());
         mRowMapping.put(MediaGroup.TYPE_SPORTS, getContentService().getSportsObserve());
