@@ -44,7 +44,7 @@ public class CacheTest {
         assertNull(CachedRow.decode(null));
         assertNull(CachedRow.decode(""));
         assertNull(CachedRow.decode("something else"));
-        assertNull(CachedRow.decode("localrecs-v1\u001Fnot-a-number\u001Fme"));
+        assertNull(CachedRow.decode("localrecs-v2\u001Fnot-a-number\u001Fme"));
     }
 
     @Test

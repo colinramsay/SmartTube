@@ -15,6 +15,7 @@ import com.liskovsoft.mediaserviceinterfaces.data.MediaItemMetadata;
 import com.liskovsoft.mediaserviceinterfaces.oauth.Account;
 import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.smartyoutubetv2.common.R;
+import com.liskovsoft.smartyoutubetv2.common.app.models.data.Video;
 import com.liskovsoft.smartyoutubetv2.common.app.models.playback.service.VideoStateService;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.cache.CachePolicy;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.cache.CachedRow;
@@ -23,6 +24,7 @@ import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Candidate;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.CandidateFilter;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ChannelAffinity;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ChannelDiscovery;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ChannelResolver;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.HeuristicRanker;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Ranker;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.RankingContext;
@@ -61,7 +63,7 @@ public class LocalRecsEngine {
     private static final long FIRST_RUN_WAIT_MS = 6_000;
     /** Don't hammer YouTube when refreshes keep producing nothing (e.g. empty history). */
     private static final long MIN_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
-    private static final int MAX_CALLS_PER_REFRESH = 16;
+    private static final int MAX_CALLS_PER_REFRESH = 18;
     /** RSS feeds for a batch are fetched in parallel by the service, so this bounds concurrency too. */
     private static final int RSS_BATCH_SIZE = 4;
     private static final int METADATA_CONCURRENCY = 2;
@@ -198,62 +200,86 @@ public class LocalRecsEngine {
         MediaItemService itemService = YouTubeServiceManager.instance().getMediaItemService();
         AtomicInteger budget = new AtomicInteger(MAX_CALLS_PER_REFRESH);
         VideoStateService stateService = VideoStateService.instance(mContext);
+        ChannelResolver resolver = new ChannelResolver();
         mConfig.newChannelsOnly = mData.isNewChannelsOnly();
 
-        // 1. Seeds from history. Everything in history also marks its video as watched and its channel as known.
-        List<MediaItem> historyItems = videosOf(call(budget, contentService::getHistory));
-        Set<String> excludedIds = new HashSet<>();
+        // Fetch everything first, so channel ids seen on one item can fill gaps on another (see ChannelResolver)
+        MediaGroup historyPage = call(budget, contentService::getHistory);
+        List<MediaItem> historyItems = videosOf(historyPage);
+        // A second page widens the set of channels we treat as already watched
+        MediaGroup historyPage2 = historyPage != null ? call(budget, () -> contentService.continueGroup(historyPage)) : null;
+        List<MediaItem> olderHistoryItems = videosOf(historyPage2);
+        MediaGroup subscriptions = call(budget, contentService::getSubscribedChannelsByLastViewed);
+        List<MediaGroup> home = call(budget, contentService::getHome);
+
+        if (historyItems.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // Related videos only need seed video ids, so fetch them before resolving channels
+        List<Seed> rawSeeds = new ArrayList<>();
+        for (MediaItem item : historyItems) {
+            if (rawSeeds.size() >= mConfig.maxSeeds) {
+                break;
+            }
+            rawSeeds.add(new Seed(item.getVideoId(), null, null, completionOf(item, stateService)));
+        }
+        List<Pair<Seed, MediaItemMetadata>> related = fetchRelated(itemService, strongestSeeds(rawSeeds), budget);
+
+        learnChannels(resolver, historyItems, olderHistoryItems, subscriptions, home, related);
+
+        // 1. Seeds, and everything watched or already on YouTube's Home
+        Set<String> excludedIds = new HashSet<>(localWatchedIds(stateService));
         Set<String> knownChannels = new HashSet<>();
         List<Seed> seeds = new ArrayList<>();
 
         for (MediaItem item : historyItems) {
+            String name = channelName(item);
+            String channelId = resolver.resolveId(item.getChannelId(), name);
             excludedIds.add(item.getVideoId());
-            ChannelAffinity.addKeys(knownChannels, item.getChannelId(), item.getAuthor());
+            ChannelAffinity.addKeys(knownChannels, channelId, name);
 
             if (seeds.size() < mConfig.maxSeeds) {
-                seeds.add(new Seed(item.getVideoId(), item.getChannelId(), item.getAuthor(), completionOf(item, stateService)));
+                seeds.add(new Seed(item.getVideoId(), channelId, name, completionOf(item, stateService)));
             }
         }
 
-        excludedIds.addAll(localWatchedIds(stateService));
-        addLocalChannels(knownChannels, stateService);
-
-        // 2. Channel affinity, with subscriptions as a weaker signal
-        MediaGroup subscriptions = call(budget, contentService::getSubscribedChannelsByLastViewed);
-        List<String> subscribedIds = new ArrayList<>();
-        if (subscriptions != null && subscriptions.getMediaItems() != null) {
-            for (MediaItem channel : subscriptions.getMediaItems()) {
-                if (channel != null && channel.getChannelId() != null) {
-                    subscribedIds.add(channel.getChannelId());
-                    ChannelAffinity.addKeys(knownChannels, channel.getChannelId(), channel.getAuthor() != null ? channel.getAuthor() : channel.getTitle());
-                }
-            }
+        for (MediaItem item : olderHistoryItems) {
+            String name = channelName(item);
+            excludedIds.add(item.getVideoId());
+            ChannelAffinity.addKeys(knownChannels, resolver.resolveId(item.getChannelId(), name), name);
         }
 
-        if (seeds.isEmpty()) {
-            return Collections.emptyList();
-        }
+        addLocalChannels(knownChannels, stateService, resolver);
 
-        ChannelAffinity affinity = ChannelAffinity.compute(seeds, subscribedIds, mConfig);
-
-        // Don't repeat what YouTube's own Home is already showing
-        for (MediaGroup group : nonNull(call(budget, contentService::getHome))) {
+        for (MediaGroup group : nonNull(home)) {
             for (MediaItem item : videosOf(group)) {
                 excludedIds.add(item.getVideoId());
             }
         }
 
-        // 3. Related videos for the strongest seeds. New channels that keep turning up here are the discoveries.
+        // 2. Channel affinity, with subscriptions as a weaker signal
+        List<String> subscribedIds = new ArrayList<>();
+        for (MediaItem channel : itemsOf(subscriptions)) {
+            if (channel.getChannelId() != null) {
+                subscribedIds.add(channel.getChannelId());
+                ChannelAffinity.addKeys(knownChannels, channel.getChannelId(), channel.getTitle());
+            }
+        }
+
+        ChannelAffinity affinity = ChannelAffinity.compute(seeds, subscribedIds, mConfig);
+
+        // 3. Related videos. New channels that keep turning up here are the discoveries.
         List<Candidate> candidates = new ArrayList<>();
 
-        for (Pair<Seed, MediaItemMetadata> result : fetchRelated(itemService, strongestSeeds(seeds), budget)) {
+        for (Pair<Seed, MediaItemMetadata> result : related) {
             int added = 0;
             for (MediaGroup group : nonNull(result.second.getSuggestions())) {
                 for (MediaItem item : videosOf(group)) {
                     if (added++ >= MAX_SUGGESTIONS_PER_SEED) {
                         break;
                     }
-                    Candidate candidate = toCandidate(item);
+                    Candidate candidate = toCandidate(item, resolver);
                     candidate.relatedSeedIds.add(result.first.videoId);
                     candidates.add(candidate);
                 }
@@ -263,10 +289,10 @@ public class LocalRecsEngine {
         ChannelAffinity discovery = ChannelDiscovery.compute(seeds, candidates, knownChannels, mConfig);
 
         // Latest uploads from the best new channels, plus from favourite channels when those are allowed
-        addRssCandidates(contentService, discovery.topChannelIds(mConfig.discoveredChannels), candidates, budget);
+        addRssCandidates(contentService, discovery.topChannelIds(mConfig.discoveredChannels), candidates, budget, resolver);
 
         if (!mConfig.newChannelsOnly) {
-            addRssCandidates(contentService, affinity.topChannelIds(mConfig.rssChannels), candidates, budget);
+            addRssCandidates(contentService, affinity.topChannelIds(mConfig.rssChannels), candidates, budget, resolver);
         }
 
         // 4-7. Filter, score, diversify
@@ -278,7 +304,7 @@ public class LocalRecsEngine {
         RankingContext context = new RankingContext(seeds, affinity, discovery, knownChannels, mConfig, System.currentTimeMillis());
         List<Candidate> ranked = new Recommender(mRanker, mConfig).recommend(context, candidates, filter);
 
-        Log.d(TAG, "Seeds %s, known channels %s, new channels %s, candidates %s, picked %s",
+        Log.d(TAG, "Seeds %s, known channel keys %s, new channels %s, candidates %s, picked %s",
                 seeds.size(), knownChannels.size(), discovery.keys().size(), candidates.size(), ranked.size());
 
         List<MediaItem> result = new ArrayList<>();
@@ -289,25 +315,54 @@ public class LocalRecsEngine {
         return result;
     }
 
-    private void addRssCandidates(ContentService contentService, List<String> channelIds, List<Candidate> candidates, AtomicInteger budget) {
+    private static void learnChannels(ChannelResolver resolver, List<MediaItem> history, List<MediaItem> olderHistory,
+                                      MediaGroup subscriptions, List<MediaGroup> home, List<Pair<Seed, MediaItemMetadata>> related) {
+        List<MediaItem> items = new ArrayList<>(history);
+        items.addAll(olderHistory);
+
+        for (MediaGroup group : nonNull(home)) {
+            items.addAll(videosOf(group));
+        }
+
+        for (Pair<Seed, MediaItemMetadata> result : related) {
+            // The seed's own page always knows its channel
+            resolver.learn(result.second.getChannelId(), result.second.getAuthor());
+
+            for (MediaGroup group : nonNull(result.second.getSuggestions())) {
+                items.addAll(videosOf(group));
+            }
+        }
+
+        for (MediaItem item : items) {
+            resolver.learn(item.getChannelId(), channelName(item));
+        }
+
+        for (MediaItem channel : itemsOf(subscriptions)) {
+            resolver.learn(channel.getChannelId(), channel.getTitle());
+        }
+    }
+
+    private void addRssCandidates(ContentService contentService, List<String> channelIds, List<Candidate> candidates,
+                                  AtomicInteger budget, ChannelResolver resolver) {
         for (int i = 0; i < channelIds.size(); i += RSS_BATCH_SIZE) {
             String[] batch = channelIds.subList(i, Math.min(i + RSS_BATCH_SIZE, channelIds.size())).toArray(new String[0]);
             for (MediaItem item : videosOf(call(budget, () -> contentService.getRssFeed(batch)))) {
-                Candidate candidate = toCandidate(item);
+                Candidate candidate = toCandidate(item, resolver);
                 candidate.fromRss = true;
                 candidates.add(candidate);
             }
         }
     }
 
-    private static void addLocalChannels(Set<String> knownChannels, VideoStateService stateService) {
+    private static void addLocalChannels(Set<String> knownChannels, VideoStateService stateService, ChannelResolver resolver) {
         if (stateService == null) {
             return;
         }
 
         for (VideoStateService.State state : new ArrayList<>(stateService.getStates())) {
             if (state != null && state.video != null) {
-                ChannelAffinity.addKeys(knownChannels, state.video.channelId, state.video.author);
+                String name = state.video.getAuthor();
+                ChannelAffinity.addKeys(knownChannels, resolver.resolveId(state.video.channelId, name), name);
             }
         }
     }
@@ -392,7 +447,7 @@ public class LocalRecsEngine {
 
         for (CachedRow.Item item : cached.items) {
             CachedMediaItem mediaItem = new CachedMediaItem(item);
-            if (filter.isAllowed(toCandidate(mediaItem))) {
+            if (filter.isAllowed(toCandidate(mediaItem, null))) {
                 items.add(mediaItem);
             }
         }
@@ -420,8 +475,13 @@ public class LocalRecsEngine {
         return result;
     }
 
-    private static Candidate toCandidate(MediaItem item) {
-        Candidate candidate = new Candidate(item.getVideoId(), item.getChannelId(), item.getAuthor(), item.getTitle());
+    /**
+     * @param resolver fills in a missing channel id, may be null
+     */
+    private static Candidate toCandidate(MediaItem item, ChannelResolver resolver) {
+        String name = channelName(item);
+        String channelId = resolver != null ? resolver.resolveId(item.getChannelId(), name) : item.getChannelId();
+        Candidate candidate = new Candidate(item.getVideoId(), channelId, name, item.getTitle());
         candidate.publishedMs = item.getPublishedDate();
         candidate.durationMs = item.getDurationMs();
         candidate.isLive = item.isLive();
@@ -430,6 +490,32 @@ public class LocalRecsEngine {
         candidate.percentWatched = item.getPercentWatched();
         candidate.payload = item;
         return candidate;
+    }
+
+    /**
+     * The plain channel name. MediaItem.getAuthor() is the whole second line on TV tiles
+     * ("Channel • 1.2M views • 3 days ago"), so reuse the app's own parsing of it.
+     */
+    private static String channelName(MediaItem item) {
+        try {
+            return Video.from(item).getAuthor();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static List<MediaItem> itemsOf(MediaGroup group) {
+        List<MediaItem> result = new ArrayList<>();
+
+        if (group != null && group.getMediaItems() != null) {
+            for (MediaItem item : group.getMediaItems()) {
+                if (item != null) {
+                    result.add(item);
+                }
+            }
+        }
+
+        return result;
     }
 
     /**
