@@ -18,6 +18,9 @@ public class Candidate {
     public boolean isUpcoming;
     public boolean isShorts;
     public int percentWatched;
+    /** -1 when unknown. */
+    public long viewCount = -1;
+    public boolean isMovie;
     public boolean fromRss;
     /** Ids of the seeds this video showed up as related to. */
     public final Set<String> relatedSeedIds = new LinkedHashSet<>();
@@ -47,6 +50,8 @@ public class Candidate {
         isLive |= other.isLive;
         isUpcoming |= other.isUpcoming;
         isShorts |= other.isShorts;
+        isMovie |= other.isMovie;
+        viewCount = Math.max(viewCount, other.viewCount);
         percentWatched = Math.max(percentWatched, other.percentWatched);
 
         if (publishedMs <= 0) {

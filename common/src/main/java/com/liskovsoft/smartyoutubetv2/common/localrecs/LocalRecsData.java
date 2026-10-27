@@ -15,6 +15,7 @@ public class LocalRecsData {
     private static final String KEY_TTL_MS = "localrecs_ttl_ms";
     private static final String KEY_KEYWORDS = "localrecs_blocked_keywords";
     private static final String KEY_CACHE = "localrecs_cache";
+    private static final String KEY_DIAGNOSTICS = "localrecs_debug";
     @SuppressLint("StaticFieldLeak")
     private static LocalRecsData sInstance;
     private final AppPrefs mPrefs;
@@ -78,5 +79,12 @@ public class LocalRecsData {
 
     public void setCache(String cache) {
         mPrefs.setData(KEY_CACHE, cache);
+    }
+
+    /**
+     * Summary of the last refresh, for tuning. Not shown in the app.
+     */
+    public void setDiagnostics(String text) {
+        mPrefs.setData(KEY_DIAGNOSTICS, text);
     }
 }

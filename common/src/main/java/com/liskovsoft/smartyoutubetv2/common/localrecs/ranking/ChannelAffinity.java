@@ -65,21 +65,52 @@ public class ChannelAffinity {
      */
     public static void addKeys(Set<String> keys, String channelId, String channelName) {
         String idKey = keyOf(channelId, null);
-        String nameKey = keyOf(null, channelName);
 
         if (idKey != null) {
             keys.add(idKey);
         }
 
-        if (nameKey != null) {
-            keys.add(nameKey);
+        for (String name : nameVariants(channelName)) {
+            keys.add(keyOf(null, name));
         }
     }
 
     public static boolean containsChannel(Set<String> keys, String channelId, String channelName) {
         String idKey = keyOf(channelId, null);
-        String nameKey = keyOf(null, channelName);
-        return (idKey != null && keys.contains(idKey)) || (nameKey != null && keys.contains(nameKey));
+
+        if (idKey != null && keys.contains(idKey)) {
+            return true;
+        }
+
+        for (String name : nameVariants(channelName)) {
+            if (keys.contains(keyOf(null, name))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The name itself plus, for collaborations ("Tom Scott and Matt Gray"), each channel in it.
+     * So a collab counts as known if you know any of the channels involved.
+     */
+    static List<String> nameVariants(String channelName) {
+        List<String> result = new ArrayList<>();
+
+        if (channelName == null || channelName.trim().isEmpty()) {
+            return result;
+        }
+
+        result.add(channelName);
+
+        for (String part : channelName.split(" and |, ")) {
+            if (!part.trim().isEmpty() && !part.trim().equalsIgnoreCase(channelName.trim())) {
+                result.add(part);
+            }
+        }
+
+        return result;
     }
 
     public Set<String> keys() {
@@ -108,6 +139,25 @@ public class ChannelAffinity {
      * Channel ids (not name keys) by descending affinity.
      */
     public List<String> topChannelIds(int limit) {
+        List<String> result = new ArrayList<>();
+
+        for (String key : topKeys(Integer.MAX_VALUE)) {
+            if (result.size() >= limit) {
+                break;
+            }
+
+            if (!key.startsWith("name:")) {
+                result.add(key);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * All keys (ids and name keys) by descending score.
+     */
+    public List<String> topKeys(int limit) {
         List<Map.Entry<String, Double>> entries = new ArrayList<>(mScores.entrySet());
         Collections.sort(entries, (a, b) -> {
             int result = Double.compare(b.getValue(), a.getValue());
@@ -116,14 +166,8 @@ public class ChannelAffinity {
 
         List<String> result = new ArrayList<>();
 
-        for (Map.Entry<String, Double> entry : entries) {
-            if (result.size() >= limit) {
-                break;
-            }
-
-            if (!entry.getKey().startsWith("name:")) {
-                result.add(entry.getKey());
-            }
+        for (int i = 0; i < Math.min(limit, entries.size()); i++) {
+            result.add(entries.get(i).getKey());
         }
 
         return result;

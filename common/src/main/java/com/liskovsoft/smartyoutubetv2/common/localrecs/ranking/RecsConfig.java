@@ -43,6 +43,8 @@ public class RecsConfig {
     public int watchedPercentThreshold = 20;
     /** Fallback Shorts detection when the item has no Shorts flag. */
     public long shortsMaxDurationMs = 60_000;
+    /** Hide videos with fewer views than this, when the view count is known. */
+    public long minViewCount = 1000;
 
     // Diversity
     public int maxPerChannel = 2;

@@ -9,8 +9,8 @@ import java.util.List;
  * Pure Java so it can be unit tested.
  */
 public class CachedRow {
-    // Bump when an old cached row should be thrown away (v3: rows built before subscriptions and channel ids were matched properly)
-    private static final String VERSION = "localrecs-v3";
+    // Bump when an old cached row should be thrown away (v4: rows built before the view count and movie filters)
+    private static final String VERSION = "localrecs-v4";
     // ASCII unit and record separators never show up in titles, so no escaping is needed once stripped
     private static final char FIELD_SEP = '\u001F';
     private static final char RECORD_SEP = '\u001E';

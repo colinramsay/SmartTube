@@ -31,6 +31,7 @@ import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.RankingContext;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Recommender;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.RecsConfig;
 import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.Seed;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.ranking.ViewCounts;
 import com.liskovsoft.smartyoutubetv2.common.prefs.BlockedChannelData;
 import com.liskovsoft.youtubeapi.service.YouTubeServiceManager;
 
@@ -39,6 +40,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
@@ -68,6 +70,8 @@ public class LocalRecsEngine {
     private static final int RSS_BATCH_SIZE = 4;
     private static final int METADATA_CONCURRENCY = 2;
     private static final int MAX_SUGGESTIONS_PER_SEED = 40;
+    /** Paid films and shows sometimes turn up in related videos. */
+    private static final String YOUTUBE_MOVIES_CHANNEL_ID = "UCuVPpxrm2VAgpH3Ktln4HXg";
     @SuppressLint("StaticFieldLeak")
     private static LocalRecsEngine sInstance;
     private final Context mContext;
@@ -310,6 +314,7 @@ public class LocalRecsEngine {
 
         Log.d(TAG, "Seeds %s, known channel keys %s, new channels %s, candidates %s, picked %s",
                 seeds.size(), knownChannels.size(), discovery.keys().size(), candidates.size(), ranked.size());
+        writeDiagnostics(seeds, subscribedKeys, knownChannels, discovery, candidates.size(), ranked);
 
         List<MediaItem> result = new ArrayList<>();
         for (Candidate candidate : ranked) {
@@ -317,6 +322,47 @@ public class LocalRecsEngine {
         }
 
         return result;
+    }
+
+    /**
+     * Plain-text summary of the last refresh, for tuning. Read it with:
+     * adb shell run-as org.smarttube.localrecs cat files/app_prefs/localrecs_debug
+     */
+    private void writeDiagnostics(List<Seed> seeds, List<String> subscribedKeys, Set<String> knownChannels,
+                                  ChannelAffinity discovery, int candidateCount, List<Candidate> row) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Refreshed ").append(new java.util.Date()).append(", mode ")
+                    .append(mConfig.newChannelsOnly ? "new channels only" : "mixed").append('\n');
+
+            sb.append("\nSeeds (").append(seeds.size()).append("):\n");
+            for (Seed seed : seeds) {
+                sb.append("  ").append(seed.channelName).append(" [").append(seed.channelId).append("] completion ")
+                        .append(String.format(Locale.US, "%.2f", seed.completion)).append('\n');
+            }
+
+            sb.append("\nSubscriptions (").append(subscribedKeys.size()).append("): ").append(subscribedKeys).append('\n');
+
+            List<String> known = new ArrayList<>(knownChannels);
+            Collections.sort(known);
+            sb.append("\nKnown channel keys (").append(known.size()).append("): ").append(known).append('\n');
+
+            sb.append("\nTop new channels:\n");
+            for (String channel : discovery.topKeys(20)) {
+                sb.append("  ").append(channel).append(String.format(Locale.US, " %.2f", discovery.get(channel))).append('\n');
+            }
+
+            sb.append("\nRow (").append(row.size()).append(" of ").append(candidateCount).append(" candidates):\n");
+            for (Candidate candidate : row) {
+                sb.append("  ").append(candidate.channelName).append(" [").append(candidate.channelId).append("] views ")
+                        .append(candidate.viewCount).append(", seeds ").append(candidate.relatedSeedIds.size())
+                        .append(candidate.fromRss ? ", rss" : "").append(" | ").append(candidate.title).append('\n');
+            }
+
+            mData.setDiagnostics(sb.toString());
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Couldn't write diagnostics: %s", e);
+        }
     }
 
     private static void learnChannels(ChannelResolver resolver, List<MediaItem> history, List<MediaItem> olderHistory,
@@ -492,6 +538,8 @@ public class LocalRecsEngine {
         candidate.isUpcoming = item.isUpcoming();
         candidate.isShorts = item.isShorts();
         candidate.percentWatched = item.getPercentWatched();
+        candidate.viewCount = ViewCounts.parse(item.getSecondTitle());
+        candidate.isMovie = item.isMovie() || YOUTUBE_MOVIES_CHANNEL_ID.equals(channelId);
         candidate.payload = item;
         return candidate;
     }

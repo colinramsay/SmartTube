@@ -63,13 +63,21 @@ public class CandidateFilter {
     }
 
     public boolean isAllowed(Candidate candidate) {
-        return !isWatched(candidate) && !isShorts(candidate) && !candidate.isLive && !candidate.isUpcoming
+        return !isWatched(candidate) && !isShorts(candidate) && !candidate.isLive && !candidate.isUpcoming && !candidate.isMovie
+                && !isTooObscure(candidate)
                 && !mBlocklist.isBlocked(candidate)
                 && !ChannelAffinity.containsChannel(mExcludedChannels, candidate.channelId, candidate.channelName);
     }
 
     private boolean isWatched(Candidate candidate) {
         return mWatchedIds.contains(candidate.videoId) || candidate.percentWatched >= mConfig.watchedPercentThreshold;
+    }
+
+    /**
+     * Videos with almost no views are mostly noise. Unknown counts are kept.
+     */
+    private boolean isTooObscure(Candidate candidate) {
+        return candidate.viewCount >= 0 && candidate.viewCount < mConfig.minViewCount;
     }
 
     private boolean isShorts(Candidate candidate) {
