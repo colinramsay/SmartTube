@@ -15,9 +15,9 @@ public class ChannelAffinity {
 
     /**
      * @param seeds most recent first
-     * @param subscribedChannelIds subscriptions, most recently viewed first
+     * @param subscribedChannels subscriptions as ids or {@link #keyOf} keys, most recently viewed first
      */
-    public static ChannelAffinity compute(List<Seed> seeds, List<String> subscribedChannelIds, RecsConfig config) {
+    public static ChannelAffinity compute(List<Seed> seeds, List<String> subscribedChannels, RecsConfig config) {
         ChannelAffinity affinity = new ChannelAffinity();
 
         if (seeds != null) {
@@ -31,13 +31,13 @@ public class ChannelAffinity {
             }
         }
 
-        if (subscribedChannelIds != null) {
-            int size = subscribedChannelIds.size();
+        if (subscribedChannels != null) {
+            int size = subscribedChannels.size();
 
             for (int i = 0; i < size; i++) {
-                String key = keyOf(subscribedChannelIds.get(i), null);
+                String key = subscribedChannels.get(i);
 
-                if (key != null) {
+                if (key != null && !key.isEmpty()) {
                     // Recently viewed subscriptions get the full base, the rest taper to half of it
                     double taper = size > 1 ? 1 - 0.5 * i / (size - 1) : 1;
                     affinity.add(key, config.subscriptionBaseScore * taper);
@@ -48,7 +48,7 @@ public class ChannelAffinity {
         return affinity;
     }
 
-    static String keyOf(String channelId, String channelName) {
+    public static String keyOf(String channelId, String channelName) {
         if (channelId != null && !channelId.isEmpty()) {
             return channelId;
         }

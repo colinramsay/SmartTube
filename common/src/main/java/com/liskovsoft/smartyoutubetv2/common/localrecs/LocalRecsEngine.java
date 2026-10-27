@@ -259,15 +259,19 @@ public class LocalRecsEngine {
         }
 
         // 2. Channel affinity, with subscriptions as a weaker signal
-        List<String> subscribedIds = new ArrayList<>();
+        // The TV subscriptions list has channel names but no ids, so match by name and borrow ids where we can
+        List<String> subscribedKeys = new ArrayList<>();
         for (MediaItem channel : itemsOf(subscriptions)) {
-            if (channel.getChannelId() != null) {
-                subscribedIds.add(channel.getChannelId());
-                ChannelAffinity.addKeys(knownChannels, channel.getChannelId(), channel.getTitle());
+            String channelId = resolver.resolveId(channel.getChannelId(), channel.getTitle());
+            String key = ChannelAffinity.keyOf(channelId, channel.getTitle());
+
+            if (key != null) {
+                subscribedKeys.add(key);
+                ChannelAffinity.addKeys(knownChannels, channelId, channel.getTitle());
             }
         }
 
-        ChannelAffinity affinity = ChannelAffinity.compute(seeds, subscribedIds, mConfig);
+        ChannelAffinity affinity = ChannelAffinity.compute(seeds, subscribedKeys, mConfig);
 
         // 3. Related videos. New channels that keep turning up here are the discoveries.
         List<Candidate> candidates = new ArrayList<>();

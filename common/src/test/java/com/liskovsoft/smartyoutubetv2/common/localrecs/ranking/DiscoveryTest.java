@@ -57,6 +57,30 @@ public class DiscoveryTest {
     }
 
     @Test
+    public void subscriptionKnownOnlyByNameStillBlocksThatChannel() {
+        // The TV subscriptions list gives names without ids
+        Set<String> known = new HashSet<>();
+        ChannelAffinity.addKeys(known, null, "Map Men");
+
+        Candidate fromSuggestions = new Candidate("v1", "UCmapmen", "Map Men", "Title");
+        Candidate other = new Candidate("v2", "UCother", "Other", "Title");
+
+        List<Candidate> result = new CandidateFilter(null, null, mConfig).excludeChannels(known)
+                .apply(Arrays.asList(fromSuggestions, other));
+
+        assertEquals(Collections.singletonList("v2"), ids(result));
+    }
+
+    @Test
+    public void subscriptionKeysGiveAffinity() {
+        ChannelAffinity affinity = ChannelAffinity.compute(null,
+                Arrays.asList("UC1", ChannelAffinity.keyOf(null, "Map Men")), mConfig);
+
+        assertTrue(affinity.get("UC1") > 0);
+        assertTrue(affinity.get("name:map men") > 0);
+    }
+
+    @Test
     public void filterDropsKnownChannels() {
         CandidateFilter filter = new CandidateFilter(null, null, mConfig).excludeChannels(known("A"));
 
