@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LOCALRECS: resources for our flavour. Icons are copied from ststable. -->
+<resources>
+    <string translatable="false" name="app_name"><![CDATA[SmarterTube]]></string>
+    <string translatable="false" name="browse_title"><![CDATA[SmarterTube]]></string>
+
+    <!-- Overrides leanbackassistant's ststable values so voice search talks to this app, not official SmartTube -->
+    <string name="search_label">SmarterTube</string>
+    <string name="settings_description">SmarterTube Videos</string>
+    <string translatable="false" name="search_authority">org.smarttube.localrecs</string>
+
+    <bool name="localrecs_updater_disabled">true</bool>
+</resources>

@@ -167,6 +167,13 @@ android {
             applicationId "org.smarttube.stable"
             targetSdkVersion project.properties.compileSdkVersion
         }
+        // LOCALRECS: our build. Same as ststable (libraries fall back to their ststable variant)
+        // but with its own id so it installs next to official SmartTube. See src/stlocal.
+        stlocal {
+            applicationId "org.smarttube.localrecs"
+            targetSdkVersion project.properties.compileSdkVersion
+            matchingFallbacks = ['ststable']
+        }
         stfdroid {
             applicationId "app.smarttube.fdroid"
             minSdkVersion 21

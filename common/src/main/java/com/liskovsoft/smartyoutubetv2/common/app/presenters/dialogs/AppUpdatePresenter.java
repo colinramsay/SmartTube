@@ -12,6 +12,7 @@ import com.liskovsoft.smartyoutubetv2.common.app.models.playback.ui.UiOptionItem
 import com.liskovsoft.smartyoutubetv2.common.app.presenters.AppDialogPresenter;
 import com.liskovsoft.smartyoutubetv2.common.app.presenters.BrowsePresenter;
 import com.liskovsoft.smartyoutubetv2.common.app.presenters.base.BasePresenter;
+import com.liskovsoft.smartyoutubetv2.common.localrecs.LocalRecsFlags; // LOCALRECS
 import com.liskovsoft.smartyoutubetv2.common.prefs.GeneralData;
 import com.liskovsoft.smartyoutubetv2.common.utils.LoadingManager;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
@@ -49,6 +50,14 @@ public class AppUpdatePresenter extends BasePresenter<Void> implements AppUpdate
     }
 
     public void start(boolean forceCheck) {
+        // LOCALRECS: our build must never offer official releases, which would replace it
+        if (LocalRecsFlags.isUpdaterDisabled(getContext())) {
+            if (forceCheck) {
+                MessageHelpers.showMessage(getContext(), R.string.localrecs_updates_disabled);
+            }
+            return;
+        }
+
         mIsForceCheck = forceCheck;
 
         if (forceCheck) {
